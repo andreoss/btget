@@ -31,16 +31,50 @@ pub fn decode(input: &[u8]) -> Result<Value, Error> {
     Ok(value)
 }
 
+pub fn encode(value: &Value) -> Vec<u8> {
+    let mut out = Vec::new();
+    encode_into(value, &mut out);
+    out
+}
+
+fn encode_into(value: &Value, out: &mut Vec<u8>) {
+    match value {
+        Value::Bytes(b) => {
+            out.extend_from_slice(b.len().to_string().as_bytes());
+            out.push(b':');
+            out.extend_from_slice(b);
+        }
+        Value::Int(i) => {
+            out.push(b'i');
+            out.extend_from_slice(i.to_string().as_bytes());
+            out.push(b'e');
+        }
+        Value::List(items) => {
+            out.push(b'l');
+            for item in items {
+                encode_into(item, out);
+            }
+            out.push(b'e');
+        }
+        Value::Dict(map) => {
+            out.push(b'd');
+            for (key, item) in map {
+                out.extend_from_slice(key.len().to_string().as_bytes());
+                out.push(b':');
+                out.extend_from_slice(key);
+                encode_into(item, out);
+            }
+            out.push(b'e');
+        }
+    }
+}
+
 pub(crate) struct Parser<'a> {
     pub(crate) input: &'a [u8],
     pub(crate) pos: usize,
 }
 
 impl<'a> Parser<'a> {
-    pub(crate) fn new(input: &'a [u8]) -> Self {
-        Parser { input, pos: 0 }
-    }
-
     fn peek(&self) -> Result<u8, Error> {
         self.input.get(self.pos).copied().ok_or(Error::UnexpectedEnd)
     }

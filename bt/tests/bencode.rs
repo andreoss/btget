@@ -1,4 +1,4 @@
-use bt::bencode::{decode, Value};
+use bt::bencode::{decode, encode, Value};
 use std::collections::BTreeMap;
 
 fn bytes(s: &str) -> Value {
@@ -84,6 +84,20 @@ fn decoded_shapes() {
         decode(b"d3:cow3:moo4:spam4:eggse").unwrap(),
         dict(vec![("cow", bytes("moo")), ("spam", bytes("eggs"))])
     );
+}
+
+#[test]
+fn round_trip_is_identity() {
+    for sample in VALID {
+        let value = decode(sample).unwrap();
+        assert_eq!(encode(&value), sample.to_vec(), "{:?}", sample);
+    }
+}
+
+#[test]
+fn encoder_sorts_keys() {
+    let value = dict(vec![("zz", Value::Int(1)), ("aa", Value::Int(2))]);
+    assert_eq!(encode(&value), b"d2:aai2e2:zzi1ee".to_vec());
 }
 
 #[test]
