@@ -9,6 +9,10 @@ WARNING: Work in progress.
 
   cargo build --release
 
+== Features
+
+* bencode decoding and encoding
+
 == License
 
 GPL-3.0.  See the LICENSE file.
