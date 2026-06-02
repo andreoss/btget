@@ -1,0 +1,8 @@
+[package]
+name = "bt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sha1.workspace = true

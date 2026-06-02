@@ -1,0 +1,14 @@
+= btget
+
+Command-line torrent downloader: point it at a torrent file or a
+magnet link and it downloads the content into a directory.
+
+WARNING: Work in progress.
+
+== Build
+
+  cargo build --release
+
+== License
+
+GPL-3.0.  See the LICENSE file.
