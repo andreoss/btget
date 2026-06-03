@@ -12,6 +12,7 @@ WARNING: Work in progress.
 == Features
 
 * bencode decoding and encoding
+* torrent file parsing
 
 == License
 
