@@ -9,6 +9,12 @@ WARNING: Work in progress.
 
   cargo build --release
 
+== Usage
+
+  btget <torrent-file | magnet-link> [-o dir] [options]
+
+See btget --help for the option list.
+
 == Features
 
 * bencode decoding and encoding
