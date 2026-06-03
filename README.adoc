@@ -13,6 +13,7 @@ WARNING: Work in progress.
 
 * bencode decoding and encoding
 * torrent file parsing
+* magnet link parsing
 
 == License
 
