@@ -1,5 +1,9 @@
 use bt::metainfo::InfoHash;
-use bt::peer::{decode_handshake, encode_handshake, exchange_handshake, Error, Handshake};
+use bt::peer::{
+    decode_handshake, encode_handshake, encode_message, exchange_handshake, parse_frame,
+    read_message, write_message, Error, Handshake, Message, MAX_FRAME,
+};
+use std::io::Cursor;
 
 fn ours() -> Handshake {
     Handshake {
@@ -82,6 +86,77 @@ impl std::io::Write for FakeStream {
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
+}
+
+fn all_messages() -> Vec<Message> {
+    vec![
+        Message::KeepAlive,
+        Message::Choke,
+        Message::Unchoke,
+        Message::Interested,
+        Message::NotInterested,
+        Message::Have(42),
+        Message::Bitfield(vec![0b1010_0000, 0x01]),
+        Message::Request { index: 1, begin: 16384, length: 16384 },
+        Message::Piece { index: 2, begin: 32768, data: vec![9u8; 100] },
+        Message::Cancel { index: 1, begin: 16384, length: 16384 },
+        Message::Port(6881),
+    ]
+}
+
+#[test]
+fn message_round_trip() {
+    for message in all_messages() {
+        let framed = encode_message(&message);
+        let mut cursor = Cursor::new(framed);
+        assert_eq!(read_message(&mut cursor).unwrap(), message);
+    }
+}
+
+#[test]
+fn stream_of_messages_reads_in_order() {
+    let mut wire = Vec::new();
+    for message in all_messages() {
+        write_message(&mut wire, &message).unwrap();
+    }
+    let mut cursor = Cursor::new(wire);
+    for message in all_messages() {
+        assert_eq!(read_message(&mut cursor).unwrap(), message);
+    }
+}
+
+#[test]
+fn keep_alive_is_zero_length() {
+    assert_eq!(encode_message(&Message::KeepAlive), vec![0, 0, 0, 0]);
+}
+
+#[test]
+fn unknown_id_rejected() {
+    assert_eq!(parse_frame(&[42]), Err(Error::UnknownId(42)));
+}
+
+#[test]
+fn short_payloads_rejected() {
+    assert_eq!(parse_frame(&[4, 0, 0]), Err(Error::BadFrame));
+    assert_eq!(parse_frame(&[6, 0, 0, 0, 1]), Err(Error::BadFrame));
+    assert_eq!(parse_frame(&[7, 0, 0, 0, 1]), Err(Error::BadFrame));
+    assert_eq!(parse_frame(&[9, 0]), Err(Error::BadFrame));
+    assert_eq!(parse_frame(&[0, 1]), Err(Error::BadFrame));
+}
+
+#[test]
+fn oversize_frame_rejected() {
+    let mut wire = (MAX_FRAME + 1).to_be_bytes().to_vec();
+    wire.extend_from_slice(&[0u8; 8]);
+    let mut cursor = Cursor::new(wire);
+    assert_eq!(read_message(&mut cursor), Err(Error::FrameTooLong(MAX_FRAME + 1)));
+}
+
+#[test]
+fn truncated_stream_errors() {
+    let framed = encode_message(&Message::Have(1));
+    let mut cursor = Cursor::new(framed[..6].to_vec());
+    assert!(matches!(read_message(&mut cursor), Err(Error::Io(_))));
 }
 
 #[test]

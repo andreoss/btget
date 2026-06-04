@@ -21,6 +21,7 @@ See btget --help for the option list.
 * torrent file parsing
 * magnet link parsing
 * HTTP tracker announces
+* peer wire protocol
 
 == License
 
