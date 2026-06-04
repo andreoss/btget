@@ -20,6 +20,7 @@ See btget --help for the option list.
 * bencode decoding and encoding
 * torrent file parsing
 * magnet link parsing
+* HTTP tracker announces
 
 == License
 
