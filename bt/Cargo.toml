@@ -6,3 +6,6 @@ license.workspace = true
 
 [dependencies]
 sha1.workspace = true
+
+[dev-dependencies]
+sha1.workspace = true
