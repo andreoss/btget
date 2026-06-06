@@ -5,5 +5,6 @@ pub mod peer;
 pub mod peer_state;
 pub mod pieces;
 pub mod requests;
+pub mod storage;
 pub mod tracker;
 pub mod verify;
