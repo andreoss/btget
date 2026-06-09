@@ -3,6 +3,7 @@ pub mod magnet;
 pub mod metainfo;
 pub mod peer;
 pub mod peer_state;
+pub mod picker;
 pub mod pieces;
 pub mod requests;
 pub mod storage;
