@@ -7,5 +7,6 @@ pub mod pieces;
 pub mod requests;
 pub mod storage;
 pub mod tracker;
+pub mod tracker_set;
 pub mod tracker_udp;
 pub mod verify;

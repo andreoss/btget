@@ -23,6 +23,7 @@ See btget --help for the option list.
 * HTTP tracker announces
 * peer wire protocol
 * piece verification and multi-file storage
+* UDP trackers and tiered failover
 
 == License
 
