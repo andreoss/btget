@@ -1,17 +1,144 @@
+use bt::engine::{download, EngineConfig, Error as EngineError, Event};
 use btget::cli;
+use std::io::Write;
+use std::time::{Duration, Instant};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    match cli::parse(&args) {
-        Ok(cli::Cli::Help) => println!("{}", cli::USAGE),
-        Ok(cli::Cli::Run(_config)) => {
-            eprintln!("download engine not implemented yet");
-            std::process::exit(3);
+    let code = match cli::parse(&args) {
+        Ok(cli::Cli::Help) => {
+            println!("{}", cli::USAGE);
+            0
         }
+        Ok(cli::Cli::Run(config)) => run(&config),
         Err(e) => {
             eprintln!("{}", e);
             eprintln!("{}", cli::USAGE);
-            std::process::exit(2);
+            2
         }
+    };
+    std::process::exit(code);
+}
+
+fn run(config: &cli::Config) -> i32 {
+    let peer_id = generate_peer_id();
+    let meta = match &config.input {
+        cli::Input::Torrent(path) => match std::fs::read(path) {
+            Ok(bytes) => match bt::metainfo::parse(&bytes) {
+                Ok(meta) => meta,
+                Err(e) => {
+                    eprintln!("bad torrent file: {:?}", e);
+                    return 3;
+                }
+            },
+            Err(e) => {
+                eprintln!("cannot read {}: {}", path.display(), e);
+                return 3;
+            }
+        },
+        cli::Input::Magnet(_) => {
+            eprintln!("magnet links are not wired to the engine yet");
+            return 3;
+        }
+    };
+    let engine_config = EngineConfig {
+        output_dir: config.output_dir.clone(),
+        peer_id,
+        port: config.port,
+        max_peers: config.max_peers,
+    };
+    let piece_length = meta.piece_length;
+    let total_bytes = meta.total_length;
+    let piece_size =
+        |index: u32| piece_length.min(total_bytes - (index as u64 * piece_length).min(total_bytes));
+    let started = Instant::now();
+    let mut bytes_done = 0u64;
+    let mut peers = 0usize;
+    let mut window_start = started;
+    let mut window_bytes = 0u64;
+    let mut rate = 0f64;
+    let mut last_line = Instant::now() - Duration::from_secs(1);
+    let result = download(&meta, &engine_config, &mut |event| {
+        match event {
+            Event::PieceDone { index, have, total } => {
+                let size = piece_size(*index);
+                bytes_done += size;
+                window_bytes += size;
+                let window = window_start.elapsed();
+                if window >= Duration::from_secs(3) {
+                    rate = window_bytes as f64 / window.as_secs_f64();
+                    window_start = Instant::now();
+                    window_bytes = 0;
+                }
+                if last_line.elapsed() >= Duration::from_secs(1) || *have == *total {
+                    last_line = Instant::now();
+                    let pct = 100.0 * bytes_done as f64 / total_bytes as f64;
+                    print!(
+                        "\r{:>6.2}%  {}/{} pieces  {}/s  peers {}    ",
+                        pct,
+                        have,
+                        total,
+                        human_bytes(rate as u64),
+                        peers
+                    );
+                    let _ = std::io::stdout().flush();
+                }
+            }
+            Event::Peers { count } => peers = *count,
+            Event::Rechecking { bad } => {
+                println!();
+                println!("recheck: {} pieces failed verification, refetching", bad);
+            }
+            _ => {}
+        }
+    });
+    match result {
+        Ok(()) => {
+            println!();
+            println!(
+                "done: {} in {}s",
+                human_bytes(total_bytes),
+                started.elapsed().as_secs()
+            );
+            0
+        }
+        Err(EngineError::Incomplete) => {
+            println!();
+            eprintln!("verification failed after retries");
+            5
+        }
+        Err(e) => {
+            println!();
+            eprintln!("download failed: {:?}", e);
+            4
+        }
+    }
+}
+
+fn generate_peer_id() -> [u8; 20] {
+    use std::hash::{BuildHasher, Hasher};
+    let mut id = *b"-BG0001-000000000000";
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_u32(std::process::id());
+    let salt = hasher.finish();
+    for (i, byte) in id[8..].iter_mut().enumerate() {
+        let n = (salt >> ((i % 8) * 8)) as u8;
+        *byte = b'a' + (n % 26);
+    }
+    id
+}
+
+fn human_bytes(value: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut size = value as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{} {}", value, UNITS[0])
+    } else {
+        format!("{:.1} {}", size, UNITS[unit])
     }
 }
