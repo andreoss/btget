@@ -56,6 +56,12 @@ impl Bitfield {
         }
     }
 
+    pub fn clear(&mut self, index: u32) {
+        if index < self.pieces {
+            self.bits[(index / 8) as usize] &= !(0x80 >> (index % 8));
+        }
+    }
+
     pub fn count_set(&self) -> u32 {
         self.bits.iter().map(|b| b.count_ones()).sum()
     }

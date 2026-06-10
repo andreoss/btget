@@ -27,7 +27,9 @@ pub struct EngineConfig {
 pub enum Event {
     Announced { peers: usize },
     Connected { addr: SocketAddr },
+    Peers { count: usize },
     PieceDone { index: u32, have: u32, total: u32 },
+    Rechecking { bad: u32 },
     Complete,
 }
 
@@ -165,13 +167,34 @@ pub fn download(
         empty_rounds: 0,
         tx_in,
     };
-    let result = engine.run(&rx_in, on_event);
+    let mut rechecks = 0;
+    let result = loop {
+        match engine.run(&rx_in, on_event) {
+            Ok(()) => {
+                let bad = engine.final_check();
+                if bad == 0 {
+                    break Ok(());
+                }
+                on_event(&Event::Rechecking { bad });
+                rechecks += 1;
+                if rechecks > 2 {
+                    break Err(Error::Incomplete);
+                }
+            }
+            Err(e) => break Err(e),
+        }
+    };
     for (_, peer) in engine.peers.drain() {
         let _ = peer.stream.shutdown(Shutdown::Both);
     }
-    if result.is_ok() {
-        let _ = engine.announce(TrackerEvent::Completed);
-        on_event(&Event::Complete);
+    match &result {
+        Ok(()) => {
+            let _ = engine.announce(TrackerEvent::Completed);
+            on_event(&Event::Complete);
+        }
+        Err(_) => {
+            let _ = engine.announce(TrackerEvent::Stopped);
+        }
     }
     result
 }
@@ -233,12 +256,18 @@ impl<'a> Engine<'a> {
                 next_id += 1;
                 self.connecting += 1;
             }
+            let count_before = self.peers.len();
             match rx_in.recv_timeout(Duration::from_millis(500)) {
                 Ok(input) => self.handle(input, on_event)?,
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => return Err(Error::Incomplete),
             }
             self.housekeeping(on_event)?;
+            if self.peers.len() != count_before {
+                on_event(&Event::Peers {
+                    count: self.peers.len(),
+                });
+            }
         }
     }
 
@@ -614,6 +643,24 @@ impl<'a> Engine<'a> {
             self.rebalance_chokes(now);
         }
         Ok(())
+    }
+
+    fn final_check(&mut self) -> u32 {
+        let mut bad = 0u32;
+        for index in 0..self.meta.pieces.len() as u32 {
+            let ok = match self.storage.read_piece(index) {
+                Ok(data) => verify_piece(&data, &self.meta.pieces[index as usize]),
+                Err(_) => false,
+            };
+            if !ok {
+                bad += 1;
+                self.ours.clear(index);
+                self.downloaded = self
+                    .downloaded
+                    .saturating_sub(self.storage.piece_size(index));
+            }
+        }
+        bad
     }
 
     fn rebalance_chokes(&mut self, now: Instant) {

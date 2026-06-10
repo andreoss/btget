@@ -22,6 +22,7 @@ See btget --help for the option list.
 * peer wire protocol
 * piece verification and multi-file storage
 * UDP trackers and tiered failover
+* multi-peer swarm downloads with rarest-first scheduling and reciprocal upload
 
 == License
 
