@@ -36,10 +36,10 @@ fn run(config: &cli::Config) -> i32 {
                 return 3;
             }
         },
-        cli::Input::Magnet(_) => {
-            eprintln!("magnet links are not wired to the engine yet");
-            return 3;
-        }
+        cli::Input::Magnet(magnet) => match resolve_magnet(magnet, peer_id, config.port) {
+            Ok(meta) => meta,
+            Err(code) => return code,
+        },
     };
     let engine_config = EngineConfig {
         output_dir: config.output_dir.clone(),
@@ -111,6 +111,66 @@ fn run(config: &cli::Config) -> i32 {
             println!();
             eprintln!("download failed: {:?}", e);
             4
+        }
+    }
+}
+
+fn resolve_magnet(
+    magnet: &bt::magnet::Magnet,
+    peer_id: [u8; 20],
+    port: u16,
+) -> Result<bt::metainfo::Metainfo, i32> {
+    use bt::tracker::{AnnounceRequest, Event as TrackerEvent};
+    use bt::tracker_set::{announce_url, TrackerSet};
+
+    if magnet.trackers.is_empty() {
+        eprintln!("magnet link has no trackers and peer discovery without them is not wired yet");
+        return Err(3);
+    }
+    let tiers: Vec<Vec<String>> = magnet.trackers.iter().map(|t| vec![t.clone()]).collect();
+    let mut trackers = TrackerSet::new(tiers.clone());
+    let request = AnnounceRequest {
+        info_hash: magnet.info_hash,
+        peer_id,
+        port,
+        uploaded: 0,
+        downloaded: 0,
+        left: 1,
+        event: TrackerEvent::Started,
+    };
+    let response = match trackers.announce(&request, &mut |url, req| {
+        announce_url(url, req, Duration::from_secs(20))
+    }) {
+        Ok(response) => response,
+        Err(e) => {
+            eprintln!("magnet announce failed: {:?}", e);
+            return Err(4);
+        }
+    };
+    if response.peers.is_empty() {
+        eprintln!("magnet announce returned no peers");
+        return Err(4);
+    }
+    println!("fetching metadata from up to {} peers", response.peers.len());
+    match bt::metadata::fetch_from_peers(
+        magnet.info_hash,
+        peer_id,
+        &response.peers,
+        Duration::from_secs(20),
+    ) {
+        Ok(metadata) => match bt::metainfo::parse_info_dict(&metadata, tiers) {
+            Ok(meta) => {
+                println!("metadata: {} ({} bytes)", meta.name, metadata.len());
+                Ok(meta)
+            }
+            Err(e) => {
+                eprintln!("fetched metadata does not parse: {:?}", e);
+                Err(5)
+            }
+        },
+        Err(e) => {
+            eprintln!("metadata fetch failed: {}", e);
+            Err(4)
         }
     }
 }

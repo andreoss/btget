@@ -24,6 +24,7 @@ See btget --help for the option list.
 * UDP trackers and tiered failover
 * multi-peer swarm downloads with rarest-first scheduling and reciprocal upload
 * progress reporting and distinct exit codes
+* magnet metadata exchange from peers
 
 == License
 

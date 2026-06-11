@@ -69,13 +69,32 @@ pub fn parse(input: &[u8]) -> Result<Metainfo, Error> {
     };
     let info_value = top.get(b"info".as_slice()).ok_or(Error::MissingKey("info"))?;
     let info_bytes = bencode::encode(info_value);
-    let digest = Sha1::digest(&info_bytes);
-    let mut hash = [0u8; 20];
-    hash.copy_from_slice(&digest);
     let info = match info_value {
         Value::Dict(map) => map,
         _ => return Err(Error::WrongType("info")),
     };
+    build(info, &info_bytes, parse_trackers(&top))
+}
+
+pub fn parse_info_dict(
+    info_bytes: &[u8],
+    trackers: Vec<Vec<String>>,
+) -> Result<Metainfo, Error> {
+    let info = match bencode::decode(info_bytes)? {
+        Value::Dict(map) => map,
+        _ => return Err(Error::NotADict),
+    };
+    build(&info, info_bytes, trackers)
+}
+
+fn build(
+    info: &BTreeMap<Vec<u8>, Value>,
+    info_bytes: &[u8],
+    trackers: Vec<Vec<String>>,
+) -> Result<Metainfo, Error> {
+    let digest = Sha1::digest(info_bytes);
+    let mut hash = [0u8; 20];
+    hash.copy_from_slice(&digest);
     let name = utf8(req_bytes(info, "name")?).ok_or(Error::BadName)?;
     check_component(&name)?;
     let piece_length = req_u64(info, "piece length")?;
@@ -104,7 +123,7 @@ pub fn parse(input: &[u8]) -> Result<Metainfo, Error> {
         return Err(Error::PieceCountMismatch);
     }
     Ok(Metainfo {
-        trackers: parse_trackers(&top),
+        trackers,
         info_hash: InfoHash(hash),
         name,
         piece_length,

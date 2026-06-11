@@ -3,6 +3,7 @@ pub mod choke;
 pub mod engine;
 pub mod extensions;
 pub mod magnet;
+pub mod metadata;
 pub mod metainfo;
 pub mod peer;
 pub mod peer_state;

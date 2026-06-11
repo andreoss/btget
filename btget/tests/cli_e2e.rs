@@ -202,6 +202,29 @@ fn trackerless_magnet_is_input_error() {
     assert_eq!(output.status.code(), Some(3));
 }
 
+#[test]
+fn magnet_download_succeeds() {
+    let dir = scratch("cli-magnet");
+    let torrent = torrent_bytes("http://127.0.0.1:1/announce");
+    let meta = bt::metainfo::parse(&torrent).unwrap();
+    let seeder = start_seeder(info_bytes(&torrent));
+    let tracker = start_tracker(vec![seeder]);
+    let uri = format!(
+        "magnet:?xt=urn:btih:{}&tr=http%3A%2F%2F{}%2Fannounce",
+        meta.info_hash.to_hex(),
+        tracker.to_string().replace(':', "%3A")
+    );
+    let output = binary().arg(&uri).arg("-o").arg(&dir).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(stdout.contains("metadata: demo.bin"), "stdout: {}", stdout);
+    assert_eq!(std::fs::read(dir.join("demo.bin")).unwrap(), CONTENT);
+}
 
 #[test]
 fn empty_swarm_is_network_error() {
