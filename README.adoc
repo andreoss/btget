@@ -23,6 +23,7 @@ See btget --help for the option list.
 * piece verification and multi-file storage
 * UDP trackers and tiered failover
 * multi-peer swarm downloads with rarest-first scheduling and reciprocal upload
+* progress reporting and distinct exit codes
 
 == License
 
