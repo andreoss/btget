@@ -25,6 +25,7 @@ pub enum Message {
     Piece { index: u32, begin: u32, data: Vec<u8> },
     Cancel { index: u32, begin: u32, length: u32 },
     Port(u16),
+    Extended { ext: u8, payload: Vec<u8> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -122,6 +123,11 @@ pub fn encode_message(message: &Message) -> Vec<u8> {
             body.push(9);
             body.extend_from_slice(&port.to_be_bytes());
         }
+        Message::Extended { ext, payload } => {
+            body.push(20);
+            body.push(*ext);
+            body.extend_from_slice(payload);
+        }
     }
     let mut out = Vec::with_capacity(4 + body.len());
     out.extend_from_slice(&(body.len() as u32).to_be_bytes());
@@ -164,6 +170,15 @@ pub fn parse_frame(body: &[u8]) -> Result<Message, Error> {
                 return Err(Error::BadFrame);
             }
             Ok(Message::Port(u16::from_be_bytes([payload[0], payload[1]])))
+        }
+        20 => {
+            if payload.is_empty() {
+                return Err(Error::BadFrame);
+            }
+            Ok(Message::Extended {
+                ext: payload[0],
+                payload: payload[1..].to_vec(),
+            })
         }
         other => Err(Error::UnknownId(other)),
     }

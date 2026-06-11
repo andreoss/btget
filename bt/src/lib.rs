@@ -1,6 +1,7 @@
 pub mod bencode;
 pub mod choke;
 pub mod engine;
+pub mod extensions;
 pub mod magnet;
 pub mod metainfo;
 pub mod peer;
