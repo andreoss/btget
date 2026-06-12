@@ -1,8 +1,9 @@
 use bt::bencode::{decode, encode, Value};
 use bt::dht::{
-    build_query, parse_compact_nodes, parse_reply, DhtClient, Error, NodeEntry, NodeId,
-    RoutingTable, K,
+    build_query, lookup_peers, parse_compact_nodes, parse_get_peers_reply, parse_reply, DhtClient,
+    Error, NodeEntry, NodeId, RoutingTable, K,
 };
+use bt::metainfo::InfoHash;
 use std::collections::BTreeMap;
 use std::net::{SocketAddr, SocketAddrV4, UdpSocket};
 use std::time::Duration;
@@ -78,6 +79,24 @@ fn compact_nodes_parse() {
 }
 
 #[test]
+fn get_peers_reply_parses_values_and_nodes() {
+    let mut r = BTreeMap::new();
+    r.insert(b"token".to_vec(), Value::Bytes(b"tok".to_vec()));
+    r.insert(
+        b"values".to_vec(),
+        Value::List(vec![Value::Bytes(vec![127, 0, 0, 1, 0x1a, 0xe1])]),
+    );
+    let mut nodes = Vec::new();
+    nodes.extend_from_slice(&[3u8; 20]);
+    nodes.extend_from_slice(&[10, 1, 1, 1, 0x1a, 0xe2]);
+    r.insert(b"nodes".to_vec(), Value::Bytes(nodes));
+    let reply = parse_get_peers_reply(&r);
+    assert_eq!(reply.token, Some(b"tok".to_vec()));
+    assert_eq!(reply.peers, vec!["127.0.0.1:6881".parse::<SocketAddr>().unwrap()]);
+    assert_eq!(reply.nodes.len(), 1);
+}
+
+#[test]
 fn bucket_index_by_leading_zeroes() {
     let a = NodeId([0u8; 20]);
     let mut close = [0u8; 20];
@@ -126,7 +145,7 @@ fn closest_sorts_by_distance() {
     assert_eq!(closest[1].id.0[0], 2);
 }
 
-fn fake_dht_node() -> SocketAddrV4 {
+fn fake_dht_node(peers: Vec<[u8; 6]>, next_node: Option<SocketAddrV4>) -> SocketAddrV4 {
     let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
     let addr = match socket.local_addr().unwrap() {
         SocketAddr::V4(v4) => v4,
@@ -155,11 +174,41 @@ fn fake_dht_node() -> SocketAddrV4 {
             r.insert(b"id".to_vec(), Value::Bytes(vec![9u8; 20]));
             match query.as_slice() {
                 b"ping" => {}
+                b"get_peers" => {
+                    r.insert(b"token".to_vec(), Value::Bytes(b"tok".to_vec()));
+                    if peers.is_empty() {
+                        if let Some(next) = next_node {
+                            let mut nodes = Vec::new();
+                            nodes.extend_from_slice(&[5u8; 20]);
+                            nodes.extend_from_slice(&next.ip().octets());
+                            nodes.extend_from_slice(&next.port().to_be_bytes());
+                            r.insert(b"nodes".to_vec(), Value::Bytes(nodes));
+                        }
+                    } else {
+                        r.insert(
+                            b"values".to_vec(),
+                            Value::List(
+                                peers
+                                    .iter()
+                                    .map(|p| Value::Bytes(p.to_vec()))
+                                    .collect(),
+                            ),
+                        );
+                    }
+                }
                 b"find_node" => {
-                    let mut nodes = Vec::new();
-                    nodes.extend_from_slice(&[5u8; 20]);
-                    nodes.extend_from_slice(&[10, 0, 0, 5, 0x1a, 0xe1]);
-                    r.insert(b"nodes".to_vec(), Value::Bytes(nodes));
+                    r.insert(b"nodes".to_vec(), Value::Bytes(Vec::new()));
+                }
+                b"announce_peer" => {
+                    match top.get(b"a".as_slice()) {
+                        Some(Value::Dict(a)) => {
+                            if a.get(b"token".as_slice()) != Some(&Value::Bytes(b"tok".to_vec()))
+                            {
+                                continue;
+                            }
+                        }
+                        _ => continue,
+                    }
                 }
                 _ => continue,
             }
@@ -175,21 +224,44 @@ fn fake_dht_node() -> SocketAddrV4 {
 
 #[test]
 fn ping_round_trip_against_local_node() {
-    let node = fake_dht_node();
+    let node = fake_dht_node(vec![], None);
     let client = DhtClient::new(own(), Duration::from_secs(3)).unwrap();
     let id = client.ping(SocketAddr::V4(node)).unwrap();
     assert_eq!(id, NodeId([9u8; 20]));
 }
 
 #[test]
-fn find_node_returns_compact_nodes() {
-    let node = fake_dht_node();
+fn lookup_walks_nodes_to_peers() {
+    let leaf = fake_dht_node(vec![[127, 0, 0, 1, 0x1a, 0xe1]], None);
+    let root = fake_dht_node(vec![], Some(leaf));
     let client = DhtClient::new(own(), Duration::from_secs(3)).unwrap();
-    let nodes = client
-        .find_node(SocketAddr::V4(node), &NodeId([1u8; 20]))
+    let (peers, table, tokens) = lookup_peers(
+        &client,
+        &[&root.to_string()],
+        &InfoHash([0xaa; 20]),
+        1,
+    )
+    .unwrap();
+    assert_eq!(peers, vec!["127.0.0.1:6881".parse::<SocketAddr>().unwrap()]);
+    assert!(table.len() >= 1);
+    assert!(!tokens.is_empty());
+}
+
+#[test]
+fn announce_peer_uses_token() {
+    let node = fake_dht_node(vec![[127, 0, 0, 1, 0x1a, 0xe1]], None);
+    let client = DhtClient::new(own(), Duration::from_secs(3)).unwrap();
+    let reply = client
+        .get_peers(SocketAddr::V4(node), &InfoHash([0xaa; 20]))
         .unwrap();
-    assert_eq!(nodes.len(), 1);
-    assert_eq!(nodes[0].addr, "10.0.0.5:6881".parse().unwrap());
+    client
+        .announce_peer(
+            SocketAddr::V4(node),
+            &InfoHash([0xaa; 20]),
+            6881,
+            &reply.token.unwrap(),
+        )
+        .unwrap();
 }
 
 #[test]
@@ -198,4 +270,34 @@ fn unreachable_node_times_out() {
     let addr = socket.local_addr().unwrap();
     let client = DhtClient::new(own(), Duration::from_millis(300)).unwrap();
     assert_eq!(client.ping(addr), Err(Error::Timeout));
+}
+
+#[test]
+#[ignore]
+fn live_bootstrap_answers_and_finds_peers() {
+    let client = DhtClient::new(bt::dht::random_node_id(), Duration::from_secs(5)).unwrap();
+    let bootstrap = std::env::var("LIVE_DHT_BOOTSTRAP").unwrap();
+    let hash = InfoHash::from_hex(&std::env::var("LIVE_INFO_HASH").unwrap()).unwrap();
+    let hosts: Vec<&str> = bootstrap.split(',').collect();
+    let mut answered = false;
+    for host in &hosts {
+        if let Ok(addrs) = std::net::ToSocketAddrs::to_socket_addrs(host) {
+            for addr in addrs {
+                if addr.is_ipv4() {
+                    if let Ok(id) = client.ping(addr) {
+                        println!("ping ok from {} id {:02x?}", addr, &id.0[..4]);
+                        answered = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if answered {
+            break;
+        }
+    }
+    assert!(answered, "no bootstrap node answered ping");
+    let (peers, table, _tokens) = lookup_peers(&client, &hosts, &hash, 5).unwrap();
+    println!("dht lookup: {} peers, {} routing entries", peers.len(), table.len());
+    assert!(!peers.is_empty());
 }

@@ -127,6 +127,7 @@ fn config(dir: &PathBuf) -> EngineConfig {
         peer_id: *b"-BG0001-abcdefghijkl",
         port: 6881,
         max_peers: 4,
+        bootstrap_peers: vec![],
     }
 }
 

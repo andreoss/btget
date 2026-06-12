@@ -181,6 +181,7 @@ fn peer_limit_respected_across_swarm() {
         peer_id: *b"-BG0001-abcdefghijkl",
         port: 6881,
         max_peers: 2,
+        bootstrap_peers: vec![],
     };
     let mut events = Vec::new();
     download(&meta, &config, &mut |e| events.push(e.clone())).unwrap();

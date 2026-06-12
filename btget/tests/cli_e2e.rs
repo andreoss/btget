@@ -194,12 +194,15 @@ fn garbage_torrent_file_is_input_error() {
 }
 
 #[test]
-fn trackerless_magnet_is_input_error() {
+fn trackerless_magnet_with_dead_dht_is_network_error() {
+    let dead = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let output = binary()
         .arg("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567")
+        .env("BTGET_DHT_BOOTSTRAP", dead.local_addr().unwrap().to_string())
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(output.status.code(), Some(4));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("no peers"));
 }
 
 #[test]

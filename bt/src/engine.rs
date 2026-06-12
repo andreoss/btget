@@ -21,6 +21,7 @@ pub struct EngineConfig {
     pub peer_id: [u8; 20],
     pub port: u16,
     pub max_peers: usize,
+    pub bootstrap_peers: Vec<SocketAddr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +31,7 @@ pub enum Event {
     Peers { count: usize },
     PieceDone { index: u32, have: u32, total: u32 },
     Rechecking { bad: u32 },
+    Resumed { have: u32, total: u32, bytes: u64 },
     Complete,
 }
 
@@ -54,6 +56,7 @@ const CHOKE_INTERVAL: Duration = Duration::from_secs(10);
 const OPTIMISTIC_INTERVAL: Duration = Duration::from_secs(30);
 const SNUB_TIMEOUT: Duration = Duration::from_secs(90);
 const MAX_SERVED_BLOCK: u32 = 1 << 17;
+const SAVE_INTERVAL: Duration = Duration::from_secs(20);
 
 enum In {
     Connected {
@@ -133,6 +136,8 @@ struct Engine<'a> {
     last_choke: Instant,
     empty_rounds: usize,
     tx_in: Sender<In>,
+    state_path: PathBuf,
+    last_saved: Instant,
 }
 
 pub fn download(
@@ -140,7 +145,7 @@ pub fn download(
     config: &EngineConfig,
     on_event: &mut dyn FnMut(&Event),
 ) -> Result<(), Error> {
-    if meta.trackers.is_empty() {
+    if meta.trackers.is_empty() && config.bootstrap_peers.is_empty() {
         return Err(Error::NoTrackers);
     }
     let storage = Storage::from_metainfo(meta, &config.output_dir);
@@ -166,7 +171,34 @@ pub fn download(
         last_choke: Instant::now() - CHOKE_INTERVAL,
         empty_rounds: 0,
         tx_in,
+        state_path: crate::resume::state_path(&config.output_dir, &meta.name),
+        last_saved: Instant::now(),
     };
+    for addr in &config.bootstrap_peers {
+        if engine.known.insert(*addr) {
+            engine.queue.push(*addr);
+        }
+    }
+    let state_path = engine.state_path.clone();
+    if let Some(saved) = crate::resume::load(&state_path, meta.info_hash, total_pieces) {
+        for index in 0..total_pieces {
+            if saved.has(index) {
+                if let Ok(data) = engine.storage.read_piece(index) {
+                    if verify_piece(&data, &meta.pieces[index as usize]) {
+                        engine.ours.set(index);
+                        engine.downloaded += data.len() as u64;
+                    }
+                }
+            }
+        }
+        if engine.ours.count_set() > 0 {
+            on_event(&Event::Resumed {
+                have: engine.ours.count_set(),
+                total: total_pieces,
+                bytes: engine.downloaded,
+            });
+        }
+    }
     let mut rechecks = 0;
     let result = loop {
         match engine.run(&rx_in, on_event) {
@@ -189,10 +221,12 @@ pub fn download(
     }
     match &result {
         Ok(()) => {
+            crate::resume::remove(&state_path);
             let _ = engine.announce(TrackerEvent::Completed);
             on_event(&Event::Complete);
         }
         Err(_) => {
+            let _ = crate::resume::save(&state_path, meta.info_hash, &engine.ours);
             let _ = engine.announce(TrackerEvent::Stopped);
         }
     }
@@ -641,6 +675,10 @@ impl<'a> Engine<'a> {
         if now.duration_since(self.last_choke) >= CHOKE_INTERVAL {
             self.last_choke = now;
             self.rebalance_chokes(now);
+        }
+        if now.duration_since(self.last_saved) >= SAVE_INTERVAL && self.ours.count_set() > 0 {
+            self.last_saved = now;
+            let _ = crate::resume::save(&self.state_path, self.meta.info_hash, &self.ours);
         }
         Ok(())
     }

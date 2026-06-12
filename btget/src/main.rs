@@ -22,6 +22,7 @@ fn main() {
 
 fn run(config: &cli::Config) -> i32 {
     let peer_id = generate_peer_id();
+    let mut bootstrap_peers: Vec<std::net::SocketAddr> = Vec::new();
     let meta = match &config.input {
         cli::Input::Torrent(path) => match std::fs::read(path) {
             Ok(bytes) => match bt::metainfo::parse(&bytes) {
@@ -37,7 +38,10 @@ fn run(config: &cli::Config) -> i32 {
             }
         },
         cli::Input::Magnet(magnet) => match resolve_magnet(magnet, peer_id, config.port) {
-            Ok(meta) => meta,
+            Ok(resolved) => {
+                bootstrap_peers = resolved.peers;
+                resolved.meta
+            }
             Err(code) => return code,
         },
     };
@@ -46,6 +50,7 @@ fn run(config: &cli::Config) -> i32 {
         peer_id,
         port: config.port,
         max_peers: config.max_peers,
+        bootstrap_peers,
     };
     let piece_length = meta.piece_length;
     let total_bytes = meta.total_length;
@@ -85,6 +90,10 @@ fn run(config: &cli::Config) -> i32 {
                 }
             }
             Event::Peers { count } => peers = *count,
+            Event::Resumed { have, total, bytes } => {
+                bytes_done = *bytes;
+                println!("resume: {}/{} pieces already verified", have, total);
+            }
             Event::Rechecking { bad } => {
                 println!();
                 println!("recheck: {} pieces failed verification, refetching", bad);
@@ -115,53 +124,71 @@ fn run(config: &cli::Config) -> i32 {
     }
 }
 
+struct ResolvedMagnet {
+    meta: bt::metainfo::Metainfo,
+    peers: Vec<std::net::SocketAddr>,
+}
+
+const DEFAULT_DHT_BOOTSTRAP: &str = "router.bittorrent.com:6881,dht.transmissionbt.com:6881";
+
 fn resolve_magnet(
     magnet: &bt::magnet::Magnet,
     peer_id: [u8; 20],
     port: u16,
-) -> Result<bt::metainfo::Metainfo, i32> {
+) -> Result<ResolvedMagnet, i32> {
     use bt::tracker::{AnnounceRequest, Event as TrackerEvent};
     use bt::tracker_set::{announce_url, TrackerSet};
 
-    if magnet.trackers.is_empty() {
-        eprintln!("magnet link has no trackers and peer discovery without them is not wired yet");
-        return Err(3);
-    }
     let tiers: Vec<Vec<String>> = magnet.trackers.iter().map(|t| vec![t.clone()]).collect();
-    let mut trackers = TrackerSet::new(tiers.clone());
-    let request = AnnounceRequest {
-        info_hash: magnet.info_hash,
-        peer_id,
-        port,
-        uploaded: 0,
-        downloaded: 0,
-        left: 1,
-        event: TrackerEvent::Started,
-    };
-    let response = match trackers.announce(&request, &mut |url, req| {
-        announce_url(url, req, Duration::from_secs(20))
-    }) {
-        Ok(response) => response,
-        Err(e) => {
-            eprintln!("magnet announce failed: {:?}", e);
-            return Err(4);
+    let mut peers: Vec<std::net::SocketAddr> = Vec::new();
+    if !magnet.trackers.is_empty() {
+        let mut trackers = TrackerSet::new(tiers.clone());
+        let request = AnnounceRequest {
+            info_hash: magnet.info_hash,
+            peer_id,
+            port,
+            uploaded: 0,
+            downloaded: 0,
+            left: 1,
+            event: TrackerEvent::Started,
+        };
+        match trackers.announce(&request, &mut |url, req| {
+            announce_url(url, req, Duration::from_secs(20))
+        }) {
+            Ok(response) => peers = response.peers,
+            Err(e) => eprintln!("magnet announce failed: {:?}", e),
         }
-    };
-    if response.peers.is_empty() {
-        eprintln!("magnet announce returned no peers");
+    }
+    if peers.is_empty() {
+        let bootstrap = std::env::var("BTGET_DHT_BOOTSTRAP")
+            .unwrap_or_else(|_| DEFAULT_DHT_BOOTSTRAP.to_string());
+        let hosts: Vec<&str> = bootstrap.split(',').collect();
+        println!("looking up peers in the dht");
+        match bt::dht::DhtClient::new(bt::dht::random_node_id(), Duration::from_secs(4)) {
+            Ok(client) => match bt::dht::lookup_peers(&client, &hosts, &magnet.info_hash, 60) {
+                Ok((found, _, _)) => peers = found,
+                Err(e) => {
+                    eprintln!("dht lookup failed: {:?}", e);
+                    return Err(4);
+                }
+            },
+            Err(e) => {
+                eprintln!("dht start failed: {:?}", e);
+                return Err(4);
+            }
+        }
+    }
+    if peers.is_empty() {
+        eprintln!("no peers found for magnet link");
         return Err(4);
     }
-    println!("fetching metadata from up to {} peers", response.peers.len());
-    match bt::metadata::fetch_from_peers(
-        magnet.info_hash,
-        peer_id,
-        &response.peers,
-        Duration::from_secs(20),
-    ) {
+    println!("fetching metadata from up to {} peers", peers.len());
+    match bt::metadata::fetch_from_peers(magnet.info_hash, peer_id, &peers, Duration::from_secs(20))
+    {
         Ok(metadata) => match bt::metainfo::parse_info_dict(&metadata, tiers) {
             Ok(meta) => {
                 println!("metadata: {} ({} bytes)", meta.name, metadata.len());
-                Ok(meta)
+                Ok(ResolvedMagnet { meta, peers })
             }
             Err(e) => {
                 eprintln!("fetched metadata does not parse: {:?}", e);

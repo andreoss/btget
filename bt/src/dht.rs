@@ -1,6 +1,7 @@
 use crate::bencode::{self, Value};
+use crate::metainfo::InfoHash;
 use std::collections::BTreeMap;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket};
 use std::time::Duration;
 
 pub const K: usize = 8;
@@ -87,6 +88,12 @@ pub enum Error {
     Remote(String),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GetPeersReply {
+    pub token: Option<Vec<u8>>,
+    pub peers: Vec<SocketAddr>,
+    pub nodes: Vec<NodeEntry>,
+}
 
 pub fn build_query(txid: &[u8], own: &NodeId, name: &str, extra: Vec<(&[u8], Value)>) -> Vec<u8> {
     let mut a = BTreeMap::new();
@@ -154,6 +161,35 @@ pub fn parse_compact_nodes(raw: &[u8]) -> Vec<NodeEntry> {
         .collect()
 }
 
+pub fn parse_get_peers_reply(r: &BTreeMap<Vec<u8>, Value>) -> GetPeersReply {
+    let token = match r.get(b"token".as_slice()) {
+        Some(Value::Bytes(t)) => Some(t.clone()),
+        _ => None,
+    };
+    let peers = match r.get(b"values".as_slice()) {
+        Some(Value::List(items)) => items
+            .iter()
+            .filter_map(|item| match item {
+                Value::Bytes(b) if b.len() == 6 => Some(SocketAddr::V4(SocketAddrV4::new(
+                    Ipv4Addr::new(b[0], b[1], b[2], b[3]),
+                    u16::from_be_bytes([b[4], b[5]]),
+                ))),
+                _ => None,
+            })
+            .filter(|a| a.port() != 0)
+            .collect(),
+        _ => Vec::new(),
+    };
+    let nodes = match r.get(b"nodes".as_slice()) {
+        Some(Value::Bytes(raw)) => parse_compact_nodes(raw),
+        _ => Vec::new(),
+    };
+    GetPeersReply {
+        token,
+        peers,
+        nodes,
+    }
+}
 
 pub struct DhtClient {
     socket: UdpSocket,
@@ -230,7 +266,38 @@ impl DhtClient {
         }
     }
 
+    pub fn get_peers(
+        &self,
+        addr: SocketAddr,
+        info_hash: &InfoHash,
+    ) -> Result<GetPeersReply, Error> {
+        let r = self.round(
+            addr,
+            "get_peers",
+            vec![(b"info_hash".as_slice(), Value::Bytes(info_hash.0.to_vec()))],
+        )?;
+        Ok(parse_get_peers_reply(&r))
+    }
 
+    pub fn announce_peer(
+        &self,
+        addr: SocketAddr,
+        info_hash: &InfoHash,
+        port: u16,
+        token: &[u8],
+    ) -> Result<(), Error> {
+        let r = self.round(
+            addr,
+            "announce_peer",
+            vec![
+                (b"implied_port".as_slice(), Value::Int(0)),
+                (b"info_hash".as_slice(), Value::Bytes(info_hash.0.to_vec())),
+                (b"port".as_slice(), Value::Int(port as i64)),
+                (b"token".as_slice(), Value::Bytes(token.to_vec())),
+            ],
+        )?;
+        reply_id(&r).map(|_| ())
+    }
 }
 
 fn reply_id(r: &BTreeMap<Vec<u8>, Value>) -> Result<NodeId, Error> {
@@ -264,3 +331,66 @@ pub fn random_node_id() -> NodeId {
     NodeId(out)
 }
 
+pub fn lookup_peers(
+    client: &DhtClient,
+    bootstrap: &[&str],
+    info_hash: &InfoHash,
+    want: usize,
+) -> Result<(Vec<SocketAddr>, RoutingTable, Vec<(SocketAddrV4, Vec<u8>)>), Error> {
+    let target = NodeId(info_hash.0);
+    let mut table = RoutingTable::new(client.own_id());
+    let mut peers: Vec<SocketAddr> = Vec::new();
+    let mut tokens: Vec<(SocketAddrV4, Vec<u8>)> = Vec::new();
+    let mut queried: std::collections::HashSet<SocketAddrV4> = std::collections::HashSet::new();
+    let mut frontier: Vec<NodeEntry> = Vec::new();
+    for host in bootstrap {
+        if let Ok(addrs) = host.to_socket_addrs() {
+            for addr in addrs {
+                if let SocketAddr::V4(v4) = addr {
+                    frontier.push(NodeEntry {
+                        id: target,
+                        addr: v4,
+                    });
+                }
+            }
+        }
+    }
+    let mut rounds = 0;
+    while !frontier.is_empty() && peers.len() < want && rounds < 24 {
+        rounds += 1;
+        frontier.sort_by_key(|entry| entry.id.distance(&target));
+        let batch: Vec<NodeEntry> = frontier
+            .iter()
+            .filter(|entry| !queried.contains(&entry.addr))
+            .take(3)
+            .copied()
+            .collect();
+        if batch.is_empty() {
+            break;
+        }
+        frontier.retain(|entry| !batch.iter().any(|b| b.addr == entry.addr));
+        for entry in batch {
+            queried.insert(entry.addr);
+            match client.get_peers(SocketAddr::V4(entry.addr), info_hash) {
+                Ok(reply) => {
+                    table.insert(entry);
+                    if let Some(token) = reply.token {
+                        tokens.push((entry.addr, token));
+                    }
+                    for peer in reply.peers {
+                        if !peers.contains(&peer) {
+                            peers.push(peer);
+                        }
+                    }
+                    for node in reply.nodes {
+                        if !queried.contains(&node.addr) {
+                            frontier.push(node);
+                        }
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+    }
+    Ok((peers, table, tokens))
+}

@@ -11,6 +11,7 @@ pub mod peer_state;
 pub mod picker;
 pub mod pieces;
 pub mod requests;
+pub mod resume;
 pub mod storage;
 pub mod tracker;
 pub mod tracker_set;
