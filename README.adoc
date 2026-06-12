@@ -26,6 +26,7 @@ See btget --help for the option list.
 * progress reporting and distinct exit codes
 * magnet metadata exchange from peers
 * DHT peer discovery for trackerless magnets
+* resume of interrupted downloads
 
 == License
 
