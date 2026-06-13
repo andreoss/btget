@@ -176,6 +176,34 @@ fn corrupt_piece_is_refetched() {
 }
 
 #[test]
+fn dead_tracker_failure_is_reported_with_url() {
+    let meta = parse(&fixtures::single_file_torrent()).unwrap();
+    let seeder = start_seeder(meta.clone(), b"hello world\n".to_vec(), false);
+    let tracker = start_tracker(vec![seeder]);
+    let mut meta = meta;
+    let dead_url = "http://127.0.0.1:1/announce".to_string();
+    meta.trackers = vec![
+        vec![dead_url.clone()],
+        vec![format!("http://{}/announce", tracker)],
+    ];
+    let dir = scratch("engine-dead-tracker");
+    let mut events = Vec::new();
+    download(&meta, &config(&dir), &mut |e| events.push(e.clone())).unwrap();
+    assert!(events.contains(&Event::Complete));
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            Event::AnnounceFailed { url, .. } if *url == dead_url
+        )),
+        "no failure event named the dead tracker: {:?}",
+        events
+            .iter()
+            .filter(|e| !matches!(e, Event::PieceDone { .. }))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn empty_swarm_errors_after_rounds() {
     let meta = parse(&fixtures::single_file_torrent()).unwrap();
     let tracker = start_tracker(vec![]);

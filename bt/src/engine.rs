@@ -27,6 +27,7 @@ pub struct EngineConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     Announced { peers: usize },
+    AnnounceFailed { url: String, reason: String },
     Connected { addr: SocketAddr },
     Peers { count: usize },
     PieceDone { index: u32, have: u32, total: u32 },
@@ -222,12 +223,12 @@ pub fn download(
     match &result {
         Ok(()) => {
             crate::resume::remove(&state_path);
-            let _ = engine.announce(TrackerEvent::Completed);
+            let _ = engine.announce(TrackerEvent::Completed, on_event);
             on_event(&Event::Complete);
         }
         Err(_) => {
             let _ = crate::resume::save(&state_path, meta.info_hash, &engine.ours);
-            let _ = engine.announce(TrackerEvent::Stopped);
+            let _ = engine.announce(TrackerEvent::Stopped, on_event);
         }
     }
     result
@@ -246,7 +247,7 @@ impl<'a> Engine<'a> {
             }
             let now = Instant::now();
             if self.timer.ready(now) || self.starved() {
-                match self.announce(self.announce_event()) {
+                match self.announce(self.announce_event(), on_event) {
                     Ok(response) => {
                         on_event(&Event::Announced {
                             peers: response.peers.len(),
@@ -320,6 +321,7 @@ impl<'a> Engine<'a> {
     fn announce(
         &mut self,
         event: TrackerEvent,
+        on_event: &mut dyn FnMut(&Event),
     ) -> Result<crate::tracker::AnnounceResponse, Error> {
         let request = AnnounceRequest {
             info_hash: self.meta.info_hash,
@@ -330,11 +332,20 @@ impl<'a> Engine<'a> {
             left: self.meta.total_length.saturating_sub(self.downloaded),
             event,
         };
-        self.trackers
+        let mut failures: Vec<(String, String)> = Vec::new();
+        let result = self
+            .trackers
             .announce(&request, &mut |url, req| {
-                announce_url(url, req, ANNOUNCE_TIMEOUT)
+                announce_url(url, req, ANNOUNCE_TIMEOUT).map_err(|e| {
+                    failures.push((url.to_string(), format!("{:?}", e)));
+                    e
+                })
             })
-            .map_err(|e| Error::Io(format!("{:?}", e)))
+            .map_err(|e| Error::Io(format!("{:?}", e)));
+        for (url, reason) in failures {
+            on_event(&Event::AnnounceFailed { url, reason });
+        }
+        result
     }
 
     fn spawn_connector(&self, addr: SocketAddr, id: u64) {

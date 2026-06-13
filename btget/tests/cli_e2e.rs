@@ -265,6 +265,36 @@ fn magnet_download_succeeds() {
 }
 
 #[test]
+fn failing_engine_tracker_is_named() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for connection in listener.incoming() {
+            let mut stream = match connection {
+                Ok(s) => s,
+                Err(_) => break,
+            };
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(b"HTTP/1.0 403 Forbidden\r\n\r\n");
+        }
+    });
+    let dir = scratch("cli-engine-tracker");
+    let announce = format!("http://{}/announce", addr);
+    let path = dir.join("demo.torrent");
+    std::fs::write(&path, torrent_bytes(&announce)).unwrap();
+    let output = binary().arg(&path).arg("-o").arg(&dir).output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(4), "stderr: {}", stderr);
+    assert!(
+        stderr.contains(&format!("announce failed at {}", announce)),
+        "stderr does not name the tracker: {}",
+        stderr
+    );
+    assert!(stderr.contains("HttpStatus(403)"), "stderr: {}", stderr);
+}
+
+#[test]
 fn empty_swarm_is_network_error() {
     let dir = scratch("cli-empty");
     let tracker = start_tracker(vec![]);
