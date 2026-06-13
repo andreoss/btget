@@ -206,6 +206,41 @@ fn trackerless_magnet_with_dead_dht_is_network_error() {
 }
 
 #[test]
+fn failing_magnet_tracker_is_named() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for connection in listener.incoming() {
+            let mut stream = match connection {
+                Ok(s) => s,
+                Err(_) => break,
+            };
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(b"HTTP/1.0 403 Forbidden\r\n\r\n");
+        }
+    });
+    let dead = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let uri = format!(
+        "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&tr=http%3A%2F%2F{}%2Fannounce",
+        addr.to_string().replace(':', "%3A")
+    );
+    let output = binary()
+        .arg(&uri)
+        .env("BTGET_DHT_BOOTSTRAP", dead.local_addr().unwrap().to_string())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(4), "stderr: {}", stderr);
+    assert!(
+        stderr.contains(&format!("http://{}/announce", addr)),
+        "stderr does not name the tracker: {}",
+        stderr
+    );
+    assert!(stderr.contains("HttpStatus(403)"), "stderr: {}", stderr);
+}
+
+#[test]
 fn magnet_download_succeeds() {
     let dir = scratch("cli-magnet");
     let torrent = torrent_bytes("http://127.0.0.1:1/announce");

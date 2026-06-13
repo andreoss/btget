@@ -153,10 +153,13 @@ fn resolve_magnet(
             event: TrackerEvent::Started,
         };
         match trackers.announce(&request, &mut |url, req| {
-            announce_url(url, req, Duration::from_secs(20))
+            announce_url(url, req, Duration::from_secs(20)).map_err(|e| {
+                eprintln!("magnet announce failed at {}: {:?}", url, e);
+                e
+            })
         }) {
             Ok(response) => peers = response.peers,
-            Err(e) => eprintln!("magnet announce failed: {:?}", e),
+            Err(_) => {}
         }
     }
     if peers.is_empty() {
