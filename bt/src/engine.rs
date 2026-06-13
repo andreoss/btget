@@ -29,6 +29,7 @@ pub enum Event {
     Announced { peers: usize },
     AnnounceFailed { url: String, reason: String },
     Connected { addr: SocketAddr },
+    PeerFailed { addr: SocketAddr, reason: String },
     Peers { count: usize },
     PieceDone { index: u32, have: u32, total: u32 },
     Rechecking { bad: u32 },
@@ -73,7 +74,10 @@ enum In {
     Died {
         id: u64,
     },
-    ConnectFailed,
+    ConnectFailed {
+        addr: SocketAddr,
+        reason: String,
+    },
 }
 
 struct PieceJob {
@@ -356,32 +360,44 @@ impl<'a> Engine<'a> {
             extensions: false,
         };
         std::thread::spawn(move || {
-            let connected = (|| {
-                let mut stream = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT).ok()?;
-                stream.set_read_timeout(Some(READ_TIMEOUT)).ok()?;
-                stream.set_write_timeout(Some(READ_TIMEOUT)).ok()?;
-                exchange_handshake(&mut stream, &mine).ok()?;
-                Some(stream)
+            let connected = (|| -> Result<TcpStream, String> {
+                let mut stream = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)
+                    .map_err(|e| format!("connect: {}", e))?;
+                stream
+                    .set_read_timeout(Some(READ_TIMEOUT))
+                    .map_err(|e| e.to_string())?;
+                stream
+                    .set_write_timeout(Some(READ_TIMEOUT))
+                    .map_err(|e| e.to_string())?;
+                exchange_handshake(&mut stream, &mine)
+                    .map_err(|e| format!("handshake: {:?}", e))?;
+                Ok(stream)
             })();
             let stream = match connected {
-                Some(s) => s,
-                None => {
-                    let _ = tx_in.send(In::ConnectFailed);
+                Ok(s) => s,
+                Err(reason) => {
+                    let _ = tx_in.send(In::ConnectFailed { addr, reason });
                     return;
                 }
             };
             let (tx_out, rx_out) = channel::<Message>();
             let mut write_half = match stream.try_clone() {
                 Ok(s) => s,
-                Err(_) => {
-                    let _ = tx_in.send(In::ConnectFailed);
+                Err(e) => {
+                    let _ = tx_in.send(In::ConnectFailed {
+                        addr,
+                        reason: e.to_string(),
+                    });
                     return;
                 }
             };
             let engine_stream = match stream.try_clone() {
                 Ok(s) => s,
-                Err(_) => {
-                    let _ = tx_in.send(In::ConnectFailed);
+                Err(e) => {
+                    let _ = tx_in.send(In::ConnectFailed {
+                        addr,
+                        reason: e.to_string(),
+                    });
                     return;
                 }
             };
@@ -458,8 +474,9 @@ impl<'a> Engine<'a> {
                 self.peers.insert(id, peer);
                 on_event(&Event::Connected { addr });
             }
-            In::ConnectFailed => {
+            In::ConnectFailed { addr, reason } => {
                 self.connecting = self.connecting.saturating_sub(1);
+                on_event(&Event::PeerFailed { addr, reason });
             }
             In::Died { id } => {
                 self.remove_peer(id);

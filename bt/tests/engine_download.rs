@@ -204,6 +204,30 @@ fn dead_tracker_failure_is_reported_with_url() {
 }
 
 #[test]
+fn unreachable_peer_failure_is_reported_with_addr() {
+    let meta = parse(&fixtures::single_file_torrent()).unwrap();
+    let seeder = start_seeder(meta.clone(), b"hello world\n".to_vec(), false);
+    let dead: SocketAddr = "127.0.0.1:1".parse().unwrap();
+    let tracker = start_tracker(vec![dead, seeder]);
+    let meta = with_tracker(meta, tracker);
+    let dir = scratch("engine-dead-peer");
+    let mut events = Vec::new();
+    download(&meta, &config(&dir), &mut |e| events.push(e.clone())).unwrap();
+    assert!(events.contains(&Event::Complete));
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            Event::PeerFailed { addr, .. } if *addr == dead
+        )),
+        "no failure event named the dead peer: {:?}",
+        events
+            .iter()
+            .filter(|e| !matches!(e, Event::PieceDone { .. }))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn empty_swarm_errors_after_rounds() {
     let meta = parse(&fixtures::single_file_torrent()).unwrap();
     let tracker = start_tracker(vec![]);

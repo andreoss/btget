@@ -93,6 +93,9 @@ fn run(config: &cli::Config) -> i32 {
             Event::AnnounceFailed { url, reason } => {
                 eprintln!("announce failed at {}: {}", url, reason);
             }
+            Event::PeerFailed { addr, reason } => {
+                eprintln!("peer failed {}: {}", addr, reason);
+            }
             Event::Resumed { have, total, bytes } => {
                 bytes_done = *bytes;
                 println!("resume: {}/{} pieces already verified", have, total);

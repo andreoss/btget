@@ -311,6 +311,25 @@ fn empty_swarm_is_network_error() {
 }
 
 #[test]
+fn unreachable_peer_is_named_on_stderr() {
+    let dir = scratch("cli-dead-peer");
+    let seeder = start_seeder(info_bytes(&torrent_bytes("http://127.0.0.1:1/announce")));
+    let dead: SocketAddr = "127.0.0.1:1".parse().unwrap();
+    let tracker = start_tracker(vec![dead, seeder]);
+    let path = dir.join("demo.torrent");
+    std::fs::write(&path, torrent_bytes(&format!("http://{}/announce", tracker))).unwrap();
+    let output = binary().arg(&path).arg("-o").arg(&dir).output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr);
+    assert!(
+        stderr.contains("peer failed 127.0.0.1:1"),
+        "stderr does not name the peer: {}",
+        stderr
+    );
+    assert_eq!(std::fs::read(dir.join("demo.bin")).unwrap(), CONTENT);
+}
+
+#[test]
 fn full_download_succeeds_with_progress() {
     let dir = scratch("cli-full");
     let seeder = start_seeder(info_bytes(&torrent_bytes("http://127.0.0.1:1/announce")));
