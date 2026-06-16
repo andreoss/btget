@@ -7,6 +7,8 @@ options:
   -o, --output <dir>     output directory (default .)
   -p, --port <port>      listen port announced to peers (default 6881)
       --max-peers <n>    peer connection limit (default 40)
+  -v, --verbose          also log per-peer connections and failures
+  -q, --quiet            only the result line and errors
   -h, --help             show this help";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +23,8 @@ pub struct Config {
     pub output_dir: PathBuf,
     pub port: u16,
     pub max_peers: usize,
+    pub verbose: bool,
+    pub quiet: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,10 +61,14 @@ pub fn parse(args: &[String]) -> Result<Cli, Error> {
     let mut output_dir = PathBuf::from(".");
     let mut port = 6881u16;
     let mut max_peers = 40usize;
+    let mut verbose = false;
+    let mut quiet = false;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "-h" | "--help" => return Ok(Cli::Help),
+            "-v" | "--verbose" => verbose = true,
+            "-q" | "--quiet" => quiet = true,
             "-o" | "--output" => {
                 let value = iter.next().ok_or(Error::MissingValue("--output"))?;
                 output_dir = PathBuf::from(value);
@@ -96,6 +104,8 @@ pub fn parse(args: &[String]) -> Result<Cli, Error> {
         output_dir,
         port,
         max_peers,
+        verbose,
+        quiet,
     }))
 }
 

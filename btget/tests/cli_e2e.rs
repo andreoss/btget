@@ -266,14 +266,32 @@ fn magnet_download_succeeds() {
         tracker.to_string().replace(':', "%3A")
     );
     let output = binary().arg(&uri).arg("-o").arg(&dir).output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr);
+    assert!(stderr.contains("metadata: demo.bin"), "stderr: {}", stderr);
+    assert_eq!(std::fs::read(dir.join("demo.bin")).unwrap(), CONTENT);
+}
+
+#[test]
+fn quiet_mode_keeps_only_the_result() {
+    let dir = scratch("cli-quiet");
+    let seeder = start_seeder(info_bytes(&torrent_bytes("http://127.0.0.1:1/announce")));
+    let tracker = start_tracker(vec![seeder]);
+    let path = dir.join("demo.torrent");
+    std::fs::write(&path, torrent_bytes(&format!("http://{}/announce", tracker))).unwrap();
+    let output = binary()
+        .arg(&path)
+        .arg("-o")
+        .arg(&dir)
+        .arg("-q")
+        .output()
+        .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(
-        output.status.code(),
-        Some(0),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(stdout.contains("metadata: demo.bin"), "stdout: {}", stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr);
+    assert!(stdout.contains("done:"), "stdout: {}", stdout);
+    assert!(!stdout.contains("pieces"), "stdout: {}", stdout);
+    assert!(stderr.is_empty(), "stderr: {}", stderr);
     assert_eq!(std::fs::read(dir.join("demo.bin")).unwrap(), CONTENT);
 }
 
@@ -331,7 +349,13 @@ fn unreachable_peer_is_named_on_stderr() {
     let tracker = start_tracker(vec![dead, seeder]);
     let path = dir.join("demo.torrent");
     std::fs::write(&path, torrent_bytes(&format!("http://{}/announce", tracker))).unwrap();
-    let output = binary().arg(&path).arg("-o").arg(&dir).output().unwrap();
+    let output = binary()
+        .arg(&path)
+        .arg("-o")
+        .arg(&dir)
+        .arg("-v")
+        .output()
+        .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr);
     assert!(
@@ -340,6 +364,18 @@ fn unreachable_peer_is_named_on_stderr() {
         stderr
     );
     assert_eq!(std::fs::read(dir.join("demo.bin")).unwrap(), CONTENT);
+
+    let dir = scratch("cli-dead-peer-default");
+    let path = dir.join("demo.torrent");
+    std::fs::write(&path, torrent_bytes(&format!("http://{}/announce", tracker))).unwrap();
+    let output = binary().arg(&path).arg("-o").arg(&dir).output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr);
+    assert!(
+        !stderr.contains("peer failed"),
+        "default output should not list peer failures: {}",
+        stderr
+    );
 }
 
 #[test]
@@ -380,6 +416,7 @@ fn full_download_succeeds_with_progress() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(output.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&output.stderr));
     assert!(stdout.contains("done:"), "stdout: {}", stdout);
+    assert!(stdout.contains("/s)"), "done line lacks speed: {}", stdout);
     assert!(stdout.contains("pieces"), "stdout: {}", stdout);
     assert_eq!(std::fs::read(dir.join("demo.bin")).unwrap(), CONTENT);
 }

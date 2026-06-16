@@ -21,6 +21,8 @@ fn torrent_path_with_defaults() {
             output_dir: PathBuf::from("."),
             port: 6881,
             max_peers: 40,
+            verbose: false,
+            quiet: false,
         })
     );
 }
@@ -45,6 +47,24 @@ fn options_parse() {
             assert_eq!(config.output_dir, PathBuf::from("out"));
             assert_eq!(config.port, 7000);
             assert_eq!(config.max_peers, 5);
+        }
+        other => panic!("{:?}", other),
+    }
+}
+
+#[test]
+fn verbosity_flags_parse() {
+    match run(&["demo.torrent", "-v"]).unwrap() {
+        Cli::Run(config) => {
+            assert!(config.verbose);
+            assert!(!config.quiet);
+        }
+        other => panic!("{:?}", other),
+    }
+    match run(&["demo.torrent", "--quiet", "--verbose"]).unwrap() {
+        Cli::Run(config) => {
+            assert!(config.verbose);
+            assert!(config.quiet);
         }
         other => panic!("{:?}", other),
     }

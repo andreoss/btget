@@ -29,6 +29,7 @@ See btget --help for the option list.
 * resume of interrupted downloads
 * privilege reduction via pledge where the platform provides it
 * IPv4 and IPv6 trackers and peers
+* verbose and quiet output modes
 
 == License
 

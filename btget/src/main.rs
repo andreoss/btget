@@ -33,8 +33,37 @@ fn main() {
     std::process::exit(code);
 }
 
+struct Logger {
+    started: Instant,
+    verbose: bool,
+    quiet: bool,
+}
+
+impl Logger {
+    fn stamp(&self) -> String {
+        format!("[{:>7.1}s]", self.started.elapsed().as_secs_f64())
+    }
+
+    fn info(&self, message: &str) {
+        if !self.quiet {
+            eprintln!("{} {}", self.stamp(), message);
+        }
+    }
+
+    fn debug(&self, message: &str) {
+        if self.verbose && !self.quiet {
+            eprintln!("{} {}", self.stamp(), message);
+        }
+    }
+}
+
 fn run(config: &cli::Config) -> i32 {
     let peer_id = generate_peer_id();
+    let log = Logger {
+        started: Instant::now(),
+        verbose: config.verbose,
+        quiet: config.quiet,
+    };
     let mut bootstrap_peers: Vec<std::net::SocketAddr> = Vec::new();
     let meta = match &config.input {
         cli::Input::Torrent(path) => match std::fs::read(path) {
@@ -50,7 +79,7 @@ fn run(config: &cli::Config) -> i32 {
                 return 3;
             }
         },
-        cli::Input::Magnet(magnet) => match resolve_magnet(magnet, peer_id, config.port) {
+        cli::Input::Magnet(magnet) => match resolve_magnet(magnet, peer_id, config.port, &log) {
             Ok(resolved) => {
                 bootstrap_peers = resolved.peers;
                 resolved.meta
@@ -58,6 +87,13 @@ fn run(config: &cli::Config) -> i32 {
             Err(code) => return code,
         },
     };
+    log.info(&format!(
+        "torrent: {} ({}, {} pieces, {} trackers)",
+        meta.name,
+        human_bytes(meta.total_length),
+        meta.pieces.len(),
+        meta.trackers.iter().map(|t| t.len()).sum::<usize>()
+    ));
     let engine_config = EngineConfig {
         output_dir: config.output_dir.clone(),
         peer_id,
@@ -69,7 +105,8 @@ fn run(config: &cli::Config) -> i32 {
     let total_bytes = meta.total_length;
     let piece_size =
         |index: u32| piece_length.min(total_bytes - (index as u64 * piece_length).min(total_bytes));
-    let started = Instant::now();
+    let started = log.started;
+    let quiet = config.quiet;
     let mut bytes_done = 0u64;
     let mut peers = 0usize;
     let mut window_start = started;
@@ -88,58 +125,104 @@ fn run(config: &cli::Config) -> i32 {
                     window_start = Instant::now();
                     window_bytes = 0;
                 }
-                if last_line.elapsed() >= Duration::from_secs(1) || *have == *total {
+                if !quiet && (last_line.elapsed() >= Duration::from_secs(1) || *have == *total) {
                     last_line = Instant::now();
                     let pct = 100.0 * bytes_done as f64 / total_bytes as f64;
                     print!(
-                        "\r{:>6.2}%  {}/{} pieces  {}/s  peers {}    ",
+                        "\r{:>6.2}%  {}/{} pieces  {}/{}  {}/s  eta {}  peers {}    ",
                         pct,
                         have,
                         total,
+                        human_bytes(bytes_done),
+                        human_bytes(total_bytes),
                         human_bytes(rate as u64),
+                        human_eta(total_bytes.saturating_sub(bytes_done), rate),
                         peers
                     );
                     let _ = std::io::stdout().flush();
                 }
             }
-            Event::Peers { count } => peers = *count,
+            Event::Peers { count } => {
+                if *count != peers {
+                    log.debug(&format!("peers: {} connected", count));
+                }
+                peers = *count;
+            }
+            Event::Announced { peers: found } => {
+                log.info(&format!("announce: {} peers", found));
+            }
             Event::AnnounceFailed { url, reason } => {
-                eprintln!("announce failed at {}: {}", url, reason);
+                log.info(&format!("announce failed at {}: {}", url, reason));
+            }
+            Event::Connected { addr } => {
+                log.debug(&format!("peer connected {}", addr));
             }
             Event::PeerFailed { addr, reason } => {
-                eprintln!("peer failed {}: {}", addr, reason);
+                log.debug(&format!("peer failed {}: {}", addr, reason));
             }
             Event::Resumed { have, total, bytes } => {
                 bytes_done = *bytes;
-                println!("resume: {}/{} pieces already verified", have, total);
+                log.info(&format!(
+                    "resume: {}/{} pieces already verified ({})",
+                    have,
+                    total,
+                    human_bytes(*bytes)
+                ));
             }
             Event::Rechecking { bad } => {
-                println!();
-                println!("recheck: {} pieces failed verification, refetching", bad);
+                if !quiet {
+                    println!();
+                }
+                log.info(&format!(
+                    "recheck: {} pieces failed verification, refetching",
+                    bad
+                ));
             }
-            _ => {}
+            Event::Complete => {}
         }
     });
     match result {
         Ok(()) => {
-            println!();
+            if !quiet {
+                println!();
+            }
+            let elapsed = started.elapsed().as_secs_f64().max(0.001);
             println!(
-                "done: {} in {}s",
+                "done: {} in {}s ({}/s)",
                 human_bytes(total_bytes),
-                started.elapsed().as_secs()
+                elapsed as u64,
+                human_bytes((total_bytes as f64 / elapsed) as u64)
             );
             0
         }
         Err(EngineError::Incomplete) => {
-            println!();
+            if !quiet {
+                println!();
+            }
             eprintln!("verification failed after retries");
             5
         }
         Err(e) => {
-            println!();
+            if !quiet {
+                println!();
+            }
             eprintln!("download failed: {:?}", e);
             4
         }
+    }
+}
+
+fn human_eta(remaining: u64, rate: f64) -> String {
+    if rate < 1.0 {
+        return "-".to_string();
+    }
+    let seconds = (remaining as f64 / rate) as u64;
+    if seconds >= 3600 {
+        format!("{}h{:02}m", seconds / 3600, (seconds % 3600) / 60)
+    } else if seconds >= 60 {
+        format!("{}m{:02}s", seconds / 60, seconds % 60)
+    } else {
+        format!("{}s", seconds)
     }
 }
 
@@ -154,6 +237,7 @@ fn resolve_magnet(
     magnet: &bt::magnet::Magnet,
     peer_id: [u8; 20],
     port: u16,
+    log: &Logger,
 ) -> Result<ResolvedMagnet, i32> {
     use bt::tracker::{AnnounceRequest, Event as TrackerEvent};
     use bt::tracker_set::{announce_url, TrackerSet};
@@ -177,7 +261,10 @@ fn resolve_magnet(
                 e
             })
         }) {
-            Ok(response) => peers = response.peers,
+            Ok(response) => {
+                log.info(&format!("magnet announce: {} peers", response.peers.len()));
+                peers = response.peers;
+            }
             Err(_) => {}
         }
     }
@@ -185,10 +272,13 @@ fn resolve_magnet(
         let bootstrap = std::env::var("BTGET_DHT_BOOTSTRAP")
             .unwrap_or_else(|_| DEFAULT_DHT_BOOTSTRAP.to_string());
         let hosts: Vec<&str> = bootstrap.split(',').collect();
-        println!("looking up peers in the dht");
+        log.info("looking up peers in the dht");
         match bt::dht::DhtClient::new(bt::dht::random_node_id(), Duration::from_secs(4)) {
             Ok(client) => match bt::dht::lookup_peers(&client, &hosts, &magnet.info_hash, 60) {
-                Ok((found, _, _)) => peers = found,
+                Ok((found, _, _)) => {
+                    log.info(&format!("dht lookup: {} peers", found.len()));
+                    peers = found;
+                }
                 Err(e) => {
                     eprintln!("dht lookup failed: {:?}", e);
                     return Err(4);
@@ -204,12 +294,12 @@ fn resolve_magnet(
         eprintln!("no peers found for magnet link");
         return Err(4);
     }
-    println!("fetching metadata from up to {} peers", peers.len());
+    log.info(&format!("fetching metadata from up to {} peers", peers.len()));
     match bt::metadata::fetch_from_peers(magnet.info_hash, peer_id, &peers, Duration::from_secs(20))
     {
         Ok(metadata) => match bt::metainfo::parse_info_dict(&metadata, tiers) {
             Ok(meta) => {
-                println!("metadata: {} ({} bytes)", meta.name, metadata.len());
+                log.info(&format!("metadata: {} ({} bytes)", meta.name, metadata.len()));
                 Ok(ResolvedMagnet { meta, peers })
             }
             Err(e) => {
