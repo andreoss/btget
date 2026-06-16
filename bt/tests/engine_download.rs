@@ -32,14 +32,23 @@ fn start_tracker(peers: Vec<SocketAddr>) -> SocketAddr {
             let mut buf = [0u8; 4096];
             let _ = stream.read(&mut buf);
             let mut compact = Vec::new();
+            let mut compact6 = Vec::new();
             for peer in &peers {
-                if let SocketAddr::V4(v4) = peer {
-                    compact.extend_from_slice(&v4.ip().octets());
-                    compact.extend_from_slice(&v4.port().to_be_bytes());
+                match peer {
+                    SocketAddr::V4(v4) => {
+                        compact.extend_from_slice(&v4.ip().octets());
+                        compact.extend_from_slice(&v4.port().to_be_bytes());
+                    }
+                    SocketAddr::V6(v6) => {
+                        compact6.extend_from_slice(&v6.ip().octets());
+                        compact6.extend_from_slice(&v6.port().to_be_bytes());
+                    }
                 }
             }
             let mut body = format!("d8:intervali1800e5:peers{}:", compact.len()).into_bytes();
             body.extend_from_slice(&compact);
+            body.extend_from_slice(format!("6:peers6{}:", compact6.len()).as_bytes());
+            body.extend_from_slice(&compact6);
             body.push(b'e');
             let mut response = format!(
                 "HTTP/1.0 200 OK\r\nContent-Length: {}\r\n\r\n",
@@ -54,7 +63,16 @@ fn start_tracker(peers: Vec<SocketAddr>) -> SocketAddr {
 }
 
 fn start_seeder(meta: Metainfo, content: Vec<u8>, corrupt_first: bool) -> SocketAddr {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    start_seeder_on("127.0.0.1:0", meta, content, corrupt_first)
+}
+
+fn start_seeder_on(
+    bind: &str,
+    meta: Metainfo,
+    content: Vec<u8>,
+    corrupt_first: bool,
+) -> SocketAddr {
+    let listener = TcpListener::bind(bind).unwrap();
     let addr = listener.local_addr().unwrap();
     let corrupted = Arc::new(AtomicBool::new(false));
     std::thread::spawn(move || {
@@ -201,6 +219,30 @@ fn dead_tracker_failure_is_reported_with_url() {
             .filter(|e| !matches!(e, Event::PieceDone { .. }))
             .collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn v6_peer_downloads_end_to_end() {
+    let meta = parse(&fixtures::single_file_torrent()).unwrap();
+    let seeder = match std::panic::catch_unwind(|| {
+        start_seeder_on("[::1]:0", meta.clone(), b"hello world\n".to_vec(), false)
+    }) {
+        Ok(addr) => addr,
+        Err(_) => return,
+    };
+    assert!(seeder.is_ipv6());
+    let tracker = start_tracker(vec![seeder]);
+    let meta = with_tracker(meta, tracker);
+    let dir = scratch("engine-v6");
+    let mut events = Vec::new();
+    download(&meta, &config(&dir), &mut |e| events.push(e.clone())).unwrap();
+    assert_eq!(
+        std::fs::read(dir.join("demo.bin")).unwrap(),
+        b"hello world\n"
+    );
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, Event::Connected { addr } if addr.is_ipv6())));
 }
 
 #[test]

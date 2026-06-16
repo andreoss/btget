@@ -88,11 +88,21 @@ pub fn parse_response(body: &[u8]) -> Result<AnnounceResponse, Error> {
         Some(_) => return Err(Error::BadResponse),
         None => 1800,
     };
-    let peers = match top.get(b"peers".as_slice()) {
+    let mut peers = match top.get(b"peers".as_slice()) {
         Some(Value::Bytes(raw)) => parse_compact_peers(raw)?,
         Some(Value::List(items)) => parse_dict_peers(items),
-        _ => return Err(Error::BadResponse),
+        Some(_) => return Err(Error::BadResponse),
+        None => Vec::new(),
     };
+    match top.get(b"peers6".as_slice()) {
+        Some(Value::Bytes(raw)) => peers.extend(parse_compact_peers6(raw)?),
+        Some(_) => return Err(Error::BadResponse),
+        None => {
+            if !top.contains_key(b"peers".as_slice()) {
+                return Err(Error::BadResponse);
+            }
+        }
+    }
     Ok(AnnounceResponse { interval, peers })
 }
 
@@ -109,6 +119,38 @@ fn parse_compact_peers(raw: &[u8]) -> Result<Vec<SocketAddr>, Error> {
         })
         .filter(|addr| addr.port() != 0)
         .collect())
+}
+
+fn parse_compact_peers6(raw: &[u8]) -> Result<Vec<SocketAddr>, Error> {
+    if raw.len() % 18 != 0 {
+        return Err(Error::BadResponse);
+    }
+    Ok(raw
+        .chunks(18)
+        .map(|c| {
+            let mut ip = [0u8; 16];
+            ip.copy_from_slice(&c[0..16]);
+            let port = u16::from_be_bytes([c[16], c[17]]);
+            SocketAddr::new(std::net::IpAddr::V6(std::net::Ipv6Addr::from(ip)), port)
+        })
+        .filter(|addr| addr.port() != 0)
+        .collect())
+}
+
+pub fn split_authority(authority: &str) -> Option<(&str, u16)> {
+    if let Some(rest) = authority.strip_prefix('[') {
+        let (host, tail) = rest.split_once(']')?;
+        match tail.strip_prefix(':') {
+            Some(port) => Some((host, port.parse().ok()?)),
+            None if tail.is_empty() => Some((host, 80)),
+            None => None,
+        }
+    } else {
+        match authority.rsplit_once(':') {
+            Some((host, port)) => Some((host, port.parse().ok()?)),
+            None => Some((authority, 80)),
+        }
+    }
 }
 
 fn parse_dict_peers(items: &[Value]) -> Vec<SocketAddr> {
@@ -142,14 +184,8 @@ pub fn http_announce(
         Some(i) => (&without_scheme[..i], &without_scheme[i..]),
         None => (without_scheme, "/"),
     };
-    let (host, port) = match authority.rsplit_once(':') {
-        Some((h, p)) => (
-            h,
-            p.parse::<u16>()
-                .map_err(|_| Error::UnsupportedUrl(base.to_string()))?,
-        ),
-        None => (authority, 80),
-    };
+    let (host, port) =
+        split_authority(authority).ok_or_else(|| Error::UnsupportedUrl(base.to_string()))?;
     let addr = (host, port)
         .to_socket_addrs()
         .map_err(|e| Error::Io(e.to_string()))?
@@ -165,7 +201,7 @@ pub fn http_announce(
         .map_err(|e| Error::Io(e.to_string()))?;
     let request = format!(
         "GET {} HTTP/1.0\r\nHost: {}\r\nAccept: */*\r\nConnection: close\r\n\r\n",
-        path, host
+        path, authority
     );
     stream
         .write_all(request.as_bytes())

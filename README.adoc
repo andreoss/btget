@@ -28,6 +28,7 @@ See btget --help for the option list.
 * DHT peer discovery for trackerless magnets
 * resume of interrupted downloads
 * privilege reduction via pledge where the platform provides it
+* IPv4 and IPv6 trackers and peers
 
 == License
 

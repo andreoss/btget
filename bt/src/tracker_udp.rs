@@ -50,23 +50,37 @@ pub fn build_announce(
     out
 }
 
-pub fn parse_announce(raw: &[u8], transaction_id: u32) -> Result<AnnounceResponse, Error> {
+pub fn parse_announce(
+    raw: &[u8],
+    transaction_id: u32,
+    v6: bool,
+) -> Result<AnnounceResponse, Error> {
     check_header(raw, ACTION_ANNOUNCE, transaction_id)?;
     if raw.len() < 20 {
         return Err(Error::BadResponse);
     }
     let interval = u32::from_be_bytes(raw[8..12].try_into().unwrap());
     let peers_raw = &raw[20..];
-    if peers_raw.len() % 6 != 0 {
+    let entry = if v6 { 18 } else { 6 };
+    if peers_raw.len() % entry != 0 {
         return Err(Error::BadResponse);
     }
     let peers = peers_raw
-        .chunks(6)
+        .chunks(entry)
         .map(|c| {
-            SocketAddr::V4(SocketAddrV4::new(
-                Ipv4Addr::new(c[0], c[1], c[2], c[3]),
-                u16::from_be_bytes([c[4], c[5]]),
-            ))
+            if v6 {
+                let mut ip = [0u8; 16];
+                ip.copy_from_slice(&c[0..16]);
+                SocketAddr::new(
+                    std::net::IpAddr::V6(std::net::Ipv6Addr::from(ip)),
+                    u16::from_be_bytes([c[16], c[17]]),
+                )
+            } else {
+                SocketAddr::V4(SocketAddrV4::new(
+                    Ipv4Addr::new(c[0], c[1], c[2], c[3]),
+                    u16::from_be_bytes([c[4], c[5]]),
+                ))
+            }
         })
         .filter(|a| a.port() != 0)
         .collect();
@@ -98,12 +112,11 @@ pub fn udp_tracker_addr(url: &str) -> Result<(String, u16), Error> {
         .strip_prefix("udp://")
         .ok_or_else(|| Error::UnsupportedUrl(url.to_string()))?;
     let authority = rest.split('/').next().unwrap_or(rest);
-    let (host, port) = authority
-        .rsplit_once(':')
+    if !authority.contains(':') {
+        return Err(Error::UnsupportedUrl(url.to_string()));
+    }
+    let (host, port) = crate::tracker::split_authority(authority)
         .ok_or_else(|| Error::UnsupportedUrl(url.to_string()))?;
-    let port = port
-        .parse::<u16>()
-        .map_err(|_| Error::UnsupportedUrl(url.to_string()))?;
     Ok((host.to_string(), port))
 }
 
@@ -120,12 +133,18 @@ pub fn udp_announce(
     attempt_timeouts: &[Duration],
 ) -> Result<AnnounceResponse, Error> {
     let (host, port) = udp_tracker_addr(url)?;
-    let target = (host.as_str(), port)
+    let addrs: Vec<SocketAddr> = (host.as_str(), port)
         .to_socket_addrs()
         .map_err(|e| Error::Io(e.to_string()))?
+        .collect();
+    let target = addrs
+        .iter()
         .find(|a| a.is_ipv4())
+        .or_else(|| addrs.first())
+        .copied()
         .ok_or_else(|| Error::Io("no address".to_string()))?;
-    let socket = UdpSocket::bind("0.0.0.0:0").map_err(|e| Error::Io(e.to_string()))?;
+    let bind_addr = if target.is_ipv6() { "[::]:0" } else { "0.0.0.0:0" };
+    let socket = UdpSocket::bind(bind_addr).map_err(|e| Error::Io(e.to_string()))?;
     socket
         .connect(target)
         .map_err(|e| Error::Io(e.to_string()))?;
@@ -134,7 +153,7 @@ pub fn udp_announce(
         socket
             .set_read_timeout(Some(*timeout))
             .map_err(|e| Error::Io(e.to_string()))?;
-        match udp_round(&socket, request) {
+        match udp_round(&socket, request, target.is_ipv6()) {
             Ok(response) => return Ok(response),
             Err(e) => last = e,
         }
@@ -142,7 +161,11 @@ pub fn udp_announce(
     Err(last)
 }
 
-fn udp_round(socket: &UdpSocket, request: &AnnounceRequest) -> Result<AnnounceResponse, Error> {
+fn udp_round(
+    socket: &UdpSocket,
+    request: &AnnounceRequest,
+    v6: bool,
+) -> Result<AnnounceResponse, Error> {
     let txid = next_transaction_id();
     socket
         .send(&build_connect(txid))
@@ -155,5 +178,5 @@ fn udp_round(socket: &UdpSocket, request: &AnnounceRequest) -> Result<AnnounceRe
         .send(&build_announce(connection_id, txid, request))
         .map_err(|e| Error::Io(e.to_string()))?;
     let n = socket.recv(&mut buf).map_err(|e| Error::Io(e.to_string()))?;
-    parse_announce(&buf[..n], txid)
+    parse_announce(&buf[..n], txid, v6)
 }

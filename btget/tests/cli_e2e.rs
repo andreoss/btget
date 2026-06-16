@@ -47,14 +47,23 @@ fn start_tracker(peers: Vec<SocketAddr>) -> SocketAddr {
             let mut buf = [0u8; 4096];
             let _ = stream.read(&mut buf);
             let mut compact = Vec::new();
+            let mut compact6 = Vec::new();
             for peer in &peers {
-                if let SocketAddr::V4(v4) = peer {
-                    compact.extend_from_slice(&v4.ip().octets());
-                    compact.extend_from_slice(&v4.port().to_be_bytes());
+                match peer {
+                    SocketAddr::V4(v4) => {
+                        compact.extend_from_slice(&v4.ip().octets());
+                        compact.extend_from_slice(&v4.port().to_be_bytes());
+                    }
+                    SocketAddr::V6(v6) => {
+                        compact6.extend_from_slice(&v6.ip().octets());
+                        compact6.extend_from_slice(&v6.port().to_be_bytes());
+                    }
                 }
             }
             let mut body = format!("d8:intervali1800e5:peers{}:", compact.len()).into_bytes();
             body.extend_from_slice(&compact);
+            body.extend_from_slice(format!("6:peers6{}:", compact6.len()).as_bytes());
+            body.extend_from_slice(&compact6);
             body.push(b'e');
             let mut response =
                 format!("HTTP/1.0 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
@@ -66,7 +75,11 @@ fn start_tracker(peers: Vec<SocketAddr>) -> SocketAddr {
 }
 
 fn start_seeder(metadata: Vec<u8>) -> SocketAddr {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    start_seeder_on("127.0.0.1:0", metadata)
+}
+
+fn start_seeder_on(bind: &str, metadata: Vec<u8>) -> SocketAddr {
+    let listener = TcpListener::bind(bind).unwrap();
     let addr = listener.local_addr().unwrap();
     std::thread::spawn(move || {
         for connection in listener.incoming() {
@@ -325,6 +338,28 @@ fn unreachable_peer_is_named_on_stderr() {
         stderr.contains("peer failed 127.0.0.1:1"),
         "stderr does not name the peer: {}",
         stderr
+    );
+    assert_eq!(std::fs::read(dir.join("demo.bin")).unwrap(), CONTENT);
+}
+
+#[test]
+fn v6_only_swarm_downloads_via_binary() {
+    let dir = scratch("cli-v6");
+    let seeder = match std::panic::catch_unwind(|| {
+        start_seeder_on("[::1]:0", info_bytes(&torrent_bytes("http://127.0.0.1:1/announce")))
+    }) {
+        Ok(addr) => addr,
+        Err(_) => return,
+    };
+    let tracker = start_tracker(vec![seeder]);
+    let path = dir.join("demo.torrent");
+    std::fs::write(&path, torrent_bytes(&format!("http://{}/announce", tracker))).unwrap();
+    let output = binary().arg(&path).arg("-o").arg(&dir).output().unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(std::fs::read(dir.join("demo.bin")).unwrap(), CONTENT);
 }

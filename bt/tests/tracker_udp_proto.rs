@@ -70,7 +70,7 @@ fn announce_response_parses_peers() {
     raw.extend_from_slice(&10u32.to_be_bytes());
     raw.extend_from_slice(&[127, 0, 0, 1, 0x1a, 0xe1]);
     raw.extend_from_slice(&[10, 0, 0, 9, 0, 0]);
-    let response = parse_announce(&raw, 5).unwrap();
+    let response = parse_announce(&raw, 5, false).unwrap();
     assert_eq!(response.interval, 900);
     assert_eq!(response.peers, vec!["127.0.0.1:6881".parse().unwrap()]);
 }
@@ -82,7 +82,7 @@ fn error_action_surfaces_message() {
     raw.extend_from_slice(&5u32.to_be_bytes());
     raw.extend_from_slice(b"denied");
     assert_eq!(
-        parse_announce(&raw, 5),
+        parse_announce(&raw, 5, false),
         Err(Error::Failure("denied".to_string()))
     );
     assert_eq!(
@@ -98,7 +98,7 @@ fn error_action_surfaces_message() {
 #[test]
 fn short_responses_rejected() {
     assert_eq!(parse_connect(&[0; 15], 0), Err(Error::BadResponse));
-    assert_eq!(parse_announce(&[0; 19], 0), Err(Error::BadResponse));
+    assert_eq!(parse_announce(&[0; 19], 0, false), Err(Error::BadResponse));
 }
 
 #[test]
@@ -199,4 +199,73 @@ fn live_udp_announce_returns_peers() {
     .unwrap();
     println!("interval {} peers {}", response.interval, response.peers.len());
     assert!(response.interval > 0);
+}
+
+#[test]
+fn announce_response_parses_v6_peers() {
+    let mut raw = Vec::new();
+    raw.extend_from_slice(&1u32.to_be_bytes());
+    raw.extend_from_slice(&5u32.to_be_bytes());
+    raw.extend_from_slice(&900u32.to_be_bytes());
+    raw.extend_from_slice(&2u32.to_be_bytes());
+    raw.extend_from_slice(&10u32.to_be_bytes());
+    let mut ip = [0u8; 16];
+    ip[15] = 1;
+    raw.extend_from_slice(&ip);
+    raw.extend_from_slice(&0x1ae1u16.to_be_bytes());
+    let response = parse_announce(&raw, 5, true).unwrap();
+    assert_eq!(response.peers, vec!["[::1]:6881".parse().unwrap()]);
+}
+
+#[test]
+fn bracketed_v6_url_parses() {
+    assert_eq!(
+        udp_tracker_addr("udp://[2001:db8::7]:6969/announce").unwrap(),
+        ("2001:db8::7".to_string(), 6969)
+    );
+}
+
+fn fake_udp_tracker_v6() -> std::net::SocketAddr {
+    let socket = UdpSocket::bind("[::1]:0").unwrap();
+    let addr = socket.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 2048];
+        loop {
+            let (n, from) = match socket.recv_from(&mut buf) {
+                Ok(v) => v,
+                Err(_) => return,
+            };
+            if n >= 16 && buf[8..12] == 0u32.to_be_bytes() {
+                let txid = &buf[12..16];
+                let mut reply = Vec::new();
+                reply.extend_from_slice(&0u32.to_be_bytes());
+                reply.extend_from_slice(txid);
+                reply.extend_from_slice(&0x4242u64.to_be_bytes());
+                let _ = socket.send_to(&reply, from);
+            } else if n >= 98 {
+                let txid = &buf[12..16];
+                let mut reply = Vec::new();
+                reply.extend_from_slice(&1u32.to_be_bytes());
+                reply.extend_from_slice(txid);
+                reply.extend_from_slice(&1800u32.to_be_bytes());
+                reply.extend_from_slice(&0u32.to_be_bytes());
+                reply.extend_from_slice(&1u32.to_be_bytes());
+                let mut ip = [0u8; 16];
+                ip[15] = 1;
+                reply.extend_from_slice(&ip);
+                reply.extend_from_slice(&0x1ae1u16.to_be_bytes());
+                let _ = socket.send_to(&reply, from);
+            }
+        }
+    });
+    addr
+}
+
+#[test]
+fn local_v6_udp_announce_round_trip() {
+    let addr = fake_udp_tracker_v6();
+    let url = format!("udp://[::1]:{}", addr.port());
+    let response = udp_announce(&url, &request(), &[Duration::from_secs(5)]).unwrap();
+    assert_eq!(response.interval, 1800);
+    assert_eq!(response.peers, vec!["[::1]:6881".parse().unwrap()]);
 }

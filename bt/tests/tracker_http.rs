@@ -162,3 +162,76 @@ fn live_announce_returns_peers() {
     assert!(response.interval > 0);
     assert!(!response.peers.is_empty());
 }
+
+#[test]
+fn compact_v6_peers_parse() {
+    let mut body = b"d8:intervali900e5:peers0:6:peers618:".to_vec();
+    let mut ip = [0u8; 16];
+    ip[15] = 1;
+    body.extend_from_slice(&ip);
+    body.extend_from_slice(&0x1ae1u16.to_be_bytes());
+    body.push(b'e');
+    let response = parse_response(&body).unwrap();
+    assert_eq!(response.peers, vec!["[::1]:6881".parse::<SocketAddr>().unwrap()]);
+}
+
+#[test]
+fn v6_only_response_parses() {
+    let mut body = b"d8:intervali900e6:peers618:".to_vec();
+    let mut ip = [0u8; 16];
+    ip[15] = 1;
+    body.extend_from_slice(&ip);
+    body.extend_from_slice(&0x1ae1u16.to_be_bytes());
+    body.push(b'e');
+    assert_eq!(parse_response(&body).unwrap().peers.len(), 1);
+}
+
+#[test]
+fn mixed_families_combine() {
+    let mut body = b"d8:intervali900e5:peers6:\x7f\x00\x00\x01\x1a\xe16:peers618:".to_vec();
+    let mut ip = [0u8; 16];
+    ip[15] = 1;
+    body.extend_from_slice(&ip);
+    body.extend_from_slice(&0x1ae1u16.to_be_bytes());
+    body.push(b'e');
+    let response = parse_response(&body).unwrap();
+    assert_eq!(response.peers.len(), 2);
+}
+
+#[test]
+fn truncated_v6_peers_rejected() {
+    let body = b"d8:intervali900e6:peers610:0123456789e";
+    assert_eq!(parse_response(body), Err(Error::BadResponse));
+}
+
+#[test]
+fn no_peer_key_rejected() {
+    assert_eq!(parse_response(b"d8:intervali900ee"), Err(Error::BadResponse));
+}
+
+#[test]
+fn bracketed_v6_host_announces_locally() {
+    let listener = match TcpListener::bind("[::1]:0") {
+        Ok(l) => l,
+        Err(_) => return,
+    };
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 2048];
+        let n = stream.read(&mut buf).unwrap();
+        let seen = String::from_utf8_lossy(&buf[..n]).to_string();
+        assert!(seen.contains(&format!("Host: [::1]:{}", addr.port())), "{}", seen);
+        let body: &[u8] = b"d8:intervali1800e5:peers6:\x7f\x00\x00\x01\x1a\xe1e";
+        let mut response = format!(
+            "HTTP/1.0 200 OK\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        response.extend_from_slice(body);
+        stream.write_all(&response).unwrap();
+    });
+    let base = format!("http://[::1]:{}/announce", addr.port());
+    let response = http_announce(&base, &request(), Duration::from_secs(5)).unwrap();
+    assert_eq!(response.interval, 1800);
+}
