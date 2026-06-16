@@ -3,7 +3,20 @@ use btget::cli;
 use std::io::Write;
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "openbsd")]
+fn sandbox() {
+    let promises = std::ffi::CString::new("stdio rpath wpath cpath inet dns").unwrap();
+    if unsafe { libc::pledge(promises.as_ptr(), std::ptr::null()) } != 0 {
+        eprintln!("pledge failed: {}", std::io::Error::last_os_error());
+        std::process::exit(2);
+    }
+}
+
+#[cfg(not(target_os = "openbsd"))]
+fn sandbox() {}
+
 fn main() {
+    sandbox();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let code = match cli::parse(&args) {
         Ok(cli::Cli::Help) => {

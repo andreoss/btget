@@ -6,3 +6,6 @@ license.workspace = true
 
 [dependencies]
 bt = { path = "../bt" }
+
+[target.'cfg(target_os = "openbsd")'.dependencies]
+libc = "0.2"
