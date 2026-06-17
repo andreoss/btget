@@ -254,7 +254,9 @@ fn unreachable_peer_failure_is_reported_with_addr() {
     let meta = with_tracker(meta, tracker);
     let dir = scratch("engine-dead-peer");
     let mut events = Vec::new();
-    download(&meta, &config(&dir), &mut |e| events.push(e.clone())).unwrap();
+    let mut config = config(&dir);
+    config.max_peers = 1;
+    download(&meta, &config, &mut |e| events.push(e.clone())).unwrap();
     assert!(events.contains(&Event::Complete));
     assert!(
         events.iter().any(|e| matches!(

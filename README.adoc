@@ -27,7 +27,8 @@ See btget --help for the option list.
 * magnet metadata exchange from peers
 * DHT peer discovery for trackerless magnets
 * resume of interrupted downloads
-* privilege reduction via pledge where the platform provides it
+* privilege reduction via pledge, filesystem confined to the output
+  directory via unveil, where the platform provides them
 * IPv4 and IPv6 trackers and peers
 * verbose and quiet output modes
 

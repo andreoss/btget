@@ -273,6 +273,30 @@ fn magnet_download_succeeds() {
 }
 
 #[test]
+fn torrent_outside_output_dir_downloads() {
+    let torrent_dir = scratch("cli-outside-torrent");
+    let out_dir = scratch("cli-outside-out");
+    let seeder = start_seeder(info_bytes(&torrent_bytes("http://127.0.0.1:1/announce")));
+    let tracker = start_tracker(vec![seeder]);
+    let path = torrent_dir.join("demo.torrent");
+    std::fs::write(&path, torrent_bytes(&format!("http://{}/announce", tracker))).unwrap();
+    let output = binary()
+        .arg(&path)
+        .arg("-o")
+        .arg(&out_dir)
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read(out_dir.join("demo.bin")).unwrap(), CONTENT);
+    assert!(!out_dir.join("demo.torrent").exists());
+}
+
+#[test]
 fn quiet_mode_keeps_only_the_result() {
     let dir = scratch("cli-quiet");
     let seeder = start_seeder(info_bytes(&torrent_bytes("http://127.0.0.1:1/announce")));
@@ -354,6 +378,8 @@ fn unreachable_peer_is_named_on_stderr() {
         .arg("-o")
         .arg(&dir)
         .arg("-v")
+        .arg("--max-peers")
+        .arg("1")
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);

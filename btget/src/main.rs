@@ -4,16 +4,49 @@ use std::io::Write;
 use std::time::{Duration, Instant};
 
 #[cfg(target_os = "openbsd")]
-fn sandbox() {
-    let promises = std::ffi::CString::new("stdio rpath wpath cpath inet dns").unwrap();
+fn pledge_or_die(promises: &str) {
+    let promises = std::ffi::CString::new(promises).unwrap();
     if unsafe { libc::pledge(promises.as_ptr(), std::ptr::null()) } != 0 {
         eprintln!("pledge failed: {}", std::io::Error::last_os_error());
         std::process::exit(2);
     }
 }
 
+#[cfg(target_os = "openbsd")]
+fn sandbox() {
+    pledge_or_die("stdio rpath wpath cpath inet dns unveil");
+}
+
+#[cfg(target_os = "openbsd")]
+fn confine(output_dir: &std::path::Path) {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = std::ffi::CString::new(output_dir.as_os_str().as_bytes()).unwrap();
+    let rwc = std::ffi::CString::new("rwc").unwrap();
+    if unsafe { libc::unveil(dir.as_ptr(), rwc.as_ptr()) } != 0 {
+        eprintln!(
+            "unveil {} failed: {}",
+            output_dir.display(),
+            std::io::Error::last_os_error()
+        );
+        std::process::exit(2);
+    }
+    let read = std::ffi::CString::new("r").unwrap();
+    for path in ["/etc/resolv.conf", "/etc/hosts"] {
+        let path = std::ffi::CString::new(path).unwrap();
+        unsafe { libc::unveil(path.as_ptr(), read.as_ptr()) };
+    }
+    if unsafe { libc::unveil(std::ptr::null(), std::ptr::null()) } != 0 {
+        eprintln!("unveil lock failed: {}", std::io::Error::last_os_error());
+        std::process::exit(2);
+    }
+    pledge_or_die("stdio rpath wpath cpath inet dns");
+}
+
 #[cfg(not(target_os = "openbsd"))]
 fn sandbox() {}
+
+#[cfg(not(target_os = "openbsd"))]
+fn confine(_output_dir: &std::path::Path) {}
 
 fn main() {
     sandbox();
@@ -94,6 +127,11 @@ fn run(config: &cli::Config) -> i32 {
         meta.pieces.len(),
         meta.trackers.iter().map(|t| t.len()).sum::<usize>()
     ));
+    if let Err(e) = std::fs::create_dir_all(&config.output_dir) {
+        eprintln!("cannot create {}: {}", config.output_dir.display(), e);
+        return 3;
+    }
+    confine(&config.output_dir);
     let engine_config = EngineConfig {
         output_dir: config.output_dir.clone(),
         peer_id,
