@@ -24,7 +24,7 @@ See btget --help for the option list.
 * UDP trackers and tiered failover
 * multi-peer swarm downloads with rarest-first scheduling and reciprocal upload
 * progress reporting and distinct exit codes
-* magnet metadata exchange from peers
+* magnet metadata exchange from peers, retried over newly found peers
 * DHT peer discovery for trackerless magnets
 * resume of interrupted downloads
 * privilege reduction via pledge, filesystem confined to the output

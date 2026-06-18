@@ -35,36 +35,45 @@ fn torrent_bytes(announce: &str) -> Vec<u8> {
     encode(&Value::Dict(top))
 }
 
+fn compact_body(peers: &[SocketAddr]) -> Vec<u8> {
+    let mut compact = Vec::new();
+    let mut compact6 = Vec::new();
+    for peer in peers {
+        match peer {
+            SocketAddr::V4(v4) => {
+                compact.extend_from_slice(&v4.ip().octets());
+                compact.extend_from_slice(&v4.port().to_be_bytes());
+            }
+            SocketAddr::V6(v6) => {
+                compact6.extend_from_slice(&v6.ip().octets());
+                compact6.extend_from_slice(&v6.port().to_be_bytes());
+            }
+        }
+    }
+    let mut body = format!("d8:intervali1800e5:peers{}:", compact.len()).into_bytes();
+    body.extend_from_slice(&compact);
+    body.extend_from_slice(format!("6:peers6{}:", compact6.len()).as_bytes());
+    body.extend_from_slice(&compact6);
+    body.push(b'e');
+    body
+}
+
 fn start_tracker(peers: Vec<SocketAddr>) -> SocketAddr {
+    start_tracker_rounds(vec![peers])
+}
+
+fn start_tracker_rounds(rounds: Vec<Vec<SocketAddr>>) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     std::thread::spawn(move || {
-        for connection in listener.incoming() {
+        for (announce, connection) in listener.incoming().enumerate() {
             let mut stream = match connection {
                 Ok(s) => s,
                 Err(_) => break,
             };
             let mut buf = [0u8; 4096];
             let _ = stream.read(&mut buf);
-            let mut compact = Vec::new();
-            let mut compact6 = Vec::new();
-            for peer in &peers {
-                match peer {
-                    SocketAddr::V4(v4) => {
-                        compact.extend_from_slice(&v4.ip().octets());
-                        compact.extend_from_slice(&v4.port().to_be_bytes());
-                    }
-                    SocketAddr::V6(v6) => {
-                        compact6.extend_from_slice(&v6.ip().octets());
-                        compact6.extend_from_slice(&v6.port().to_be_bytes());
-                    }
-                }
-            }
-            let mut body = format!("d8:intervali1800e5:peers{}:", compact.len()).into_bytes();
-            body.extend_from_slice(&compact);
-            body.extend_from_slice(format!("6:peers6{}:", compact6.len()).as_bytes());
-            body.extend_from_slice(&compact6);
-            body.push(b'e');
+            let body = compact_body(&rounds[announce.min(rounds.len() - 1)]);
             let mut response =
                 format!("HTTP/1.0 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
             response.extend_from_slice(&body);
@@ -444,5 +453,33 @@ fn full_download_succeeds_with_progress() {
     assert!(stdout.contains("done:"), "stdout: {}", stdout);
     assert!(stdout.contains("/s)"), "done line lacks speed: {}", stdout);
     assert!(stdout.contains("pieces"), "stdout: {}", stdout);
+    assert_eq!(std::fs::read(dir.join("demo.bin")).unwrap(), CONTENT);
+}
+
+#[test]
+fn magnet_metadata_fetch_survives_a_failed_round() {
+    let dir = scratch("cli-magnet-retry");
+    let torrent = torrent_bytes("http://127.0.0.1:1/announce");
+    let meta = bt::metainfo::parse(&torrent).unwrap();
+    let seeder = start_seeder(info_bytes(&torrent));
+    let dead: SocketAddr = "127.0.0.1:1".parse().unwrap();
+    let tracker = start_tracker_rounds(vec![vec![dead], vec![dead, seeder]]);
+    let dead_dht = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let uri = format!(
+        "magnet:?xt=urn:btih:{}&tr=http%3A%2F%2F{}%2Fannounce",
+        meta.info_hash.to_hex(),
+        tracker.to_string().replace(':', "%3A")
+    );
+    let output = binary()
+        .arg(&uri)
+        .arg("-o")
+        .arg(&dir)
+        .env("BTGET_DHT_BOOTSTRAP", dead_dht.local_addr().unwrap().to_string())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr);
+    assert!(stderr.contains("metadata fetch failed"), "stderr: {}", stderr);
+    assert!(stderr.contains("metadata: demo.bin"), "stderr: {}", stderr);
     assert_eq!(std::fs::read(dir.join("demo.bin")).unwrap(), CONTENT);
 }
