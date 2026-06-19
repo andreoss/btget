@@ -38,8 +38,14 @@ pub enum Error {
     Failure(String),
 }
 
+const MAX_RESPONSE: u64 = 1 << 20;
+
+pub fn url_is_printable_ascii(url: &str) -> bool {
+    url.bytes().all(|b| b > 0x20 && b < 0x7f)
+}
+
 pub fn build_announce_url(base: &str, req: &AnnounceRequest) -> Result<String, Error> {
-    if !base.starts_with("http://") {
+    if !base.starts_with("http://") || !url_is_printable_ascii(base) {
         return Err(Error::UnsupportedUrl(base.to_string()));
     }
     let separator = if base.contains('?') { '&' } else { '?' };
@@ -207,7 +213,8 @@ pub fn http_announce(
         .write_all(request.as_bytes())
         .map_err(|e| Error::Io(e.to_string()))?;
     let mut raw = Vec::new();
-    stream
+    (&mut stream)
+        .take(MAX_RESPONSE)
         .read_to_end(&mut raw)
         .map_err(|e| Error::Io(e.to_string()))?;
     let (status, body) = split_http_response(&raw)?;

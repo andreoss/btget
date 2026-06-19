@@ -235,3 +235,49 @@ fn bracketed_v6_host_announces_locally() {
     let response = http_announce(&base, &request(), Duration::from_secs(5)).unwrap();
     assert_eq!(response.interval, 1800);
 }
+
+#[test]
+fn control_bytes_in_the_url_are_refused() {
+    for base in [
+        "http://127.0.0.1:9999/announce\r\nX-Injected: yes",
+        "http://127.0.0.1:9999/announce\nX-Injected: yes",
+        "http://127.0.0.1:9999/announce HTTP/1.0",
+        "http://127.0.0.1:9999/announce\0",
+    ] {
+        assert_eq!(
+            build_announce_url(base, &request()),
+            Err(Error::UnsupportedUrl(base.to_string())),
+            "accepted {:?}",
+            base
+        );
+        assert_eq!(
+            http_announce(base, &request(), Duration::from_secs(5)),
+            Err(Error::UnsupportedUrl(base.to_string())),
+            "announced to {:?}",
+            base
+        );
+    }
+}
+
+#[test]
+fn oversized_response_does_not_grow_without_bound() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 1024];
+        let _ = stream.read(&mut buf);
+        let _ = stream.write_all(b"HTTP/1.0 200 OK\r\n\r\nd8:intervali1800e5:peers");
+        let chunk = vec![b'x'; 64 * 1024];
+        for _ in 0..64 {
+            if stream.write_all(&chunk).is_err() {
+                return;
+            }
+        }
+    });
+    let base = format!("http://{}/announce", addr);
+    assert_eq!(
+        http_announce(&base, &request(), Duration::from_secs(5)),
+        Err(Error::BadResponse)
+    );
+}

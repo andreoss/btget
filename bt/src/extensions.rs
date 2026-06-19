@@ -140,7 +140,11 @@ fn find_dict_end(payload: &[u8]) -> Option<usize> {
             b'0'..=b'9' => {
                 let colon = payload[i..].iter().position(|b| *b == b':')? + i;
                 let len: usize = std::str::from_utf8(&payload[i..colon]).ok()?.parse().ok()?;
-                i = colon + 1 + len;
+                let next = colon.checked_add(1)?.checked_add(len)?;
+                if next > payload.len() {
+                    return None;
+                }
+                i = next;
             }
             b'e' => {
                 depth = depth.checked_sub(1)?;

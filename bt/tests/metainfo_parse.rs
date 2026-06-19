@@ -133,3 +133,36 @@ fn empty_files_rejected() {
     });
     assert_eq!(parse(&torrent), Err(Error::NoFiles));
 }
+
+fn file_entry(name: &str, length: i64) -> Value {
+    let mut entry = std::collections::BTreeMap::new();
+    entry.insert(b"length".to_vec(), Value::Int(length));
+    entry.insert(
+        b"path".to_vec(),
+        Value::List(vec![Value::Bytes(name.as_bytes().to_vec())]),
+    );
+    Value::Dict(entry)
+}
+
+#[test]
+fn total_length_that_wraps_is_rejected() {
+    let torrent = with_info(&fixtures::multi_file_torrent(), |info| {
+        info.insert(
+            b"files".to_vec(),
+            Value::List(vec![
+                file_entry("a", i64::MAX),
+                file_entry("b", i64::MAX),
+                file_entry("c", 16386),
+            ]),
+        );
+    });
+    assert_eq!(parse(&torrent), Err(Error::BadLength));
+}
+
+#[test]
+fn oversized_piece_length_rejected() {
+    let torrent = with_info(&fixtures::single_file_torrent(), |info| {
+        info.insert(b"piece length".to_vec(), Value::Int(64 << 20));
+    });
+    assert_eq!(parse(&torrent), Err(Error::BadLength));
+}

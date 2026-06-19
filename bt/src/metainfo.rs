@@ -2,6 +2,8 @@ use crate::bencode::{self, Value};
 use sha1::{Digest, Sha1};
 use std::collections::BTreeMap;
 
+const MAX_PIECE_LENGTH: u64 = 32 << 20;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct InfoHash(pub [u8; 20]);
 
@@ -98,7 +100,7 @@ fn build(
     let name = utf8(req_bytes(info, "name")?).ok_or(Error::BadName)?;
     check_component(&name)?;
     let piece_length = req_u64(info, "piece length")?;
-    if piece_length == 0 {
+    if piece_length == 0 || piece_length > MAX_PIECE_LENGTH {
         return Err(Error::BadLength);
     }
     let pieces_raw = req_bytes(info, "pieces")?;
@@ -114,7 +116,12 @@ fn build(
         })
         .collect();
     let files = parse_files(info)?;
-    let total_length: u64 = files.iter().map(|f| f.length).sum();
+    let mut total_length = 0u64;
+    for file in &files {
+        total_length = total_length
+            .checked_add(file.length)
+            .ok_or(Error::BadLength)?;
+    }
     if total_length == 0 {
         return Err(Error::BadLength);
     }

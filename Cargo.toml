@@ -9,3 +9,6 @@ license = "GPL-3.0-only"
 
 [workspace.dependencies]
 sha1 = "0.10"
+
+[profile.release]
+overflow-checks = true

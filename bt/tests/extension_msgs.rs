@@ -103,3 +103,18 @@ fn missing_piece_rejected() {
         Err(Error::BadPayload)
     );
 }
+
+#[test]
+fn crafted_string_length_cannot_run_the_scan_away() {
+    let payload = b"d18446744073709551595:";
+    assert_eq!(parse_ext_handshake(payload), Err(Error::BadPayload));
+    assert_eq!(parse_metadata_message(payload), Err(Error::BadPayload));
+}
+
+#[test]
+fn string_length_past_the_payload_rejected() {
+    assert_eq!(
+        parse_ext_handshake(b"d2:id64:short"),
+        Err(Error::BadPayload)
+    );
+}
