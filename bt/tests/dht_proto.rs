@@ -301,3 +301,36 @@ fn live_bootstrap_answers_and_finds_peers() {
     println!("dht lookup: {} peers, {} routing entries", peers.len(), table.len());
     assert!(!peers.is_empty());
 }
+
+#[test]
+fn transaction_ids_are_not_sequential() {
+    let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let addr = server.local_addr().unwrap();
+    let client = DhtClient::new(own(), Duration::from_millis(150)).unwrap();
+    let queries = std::thread::spawn(move || {
+        let mut seen: Vec<u16> = Vec::new();
+        let mut buf = [0u8; 1024];
+        for _ in 0..4 {
+            let (n, _) = server.recv_from(&mut buf).unwrap();
+            match decode(&buf[..n]).unwrap() {
+                Value::Dict(top) => match top.get(b"t".as_slice()) {
+                    Some(Value::Bytes(t)) if t.len() == 2 => {
+                        seen.push(u16::from_be_bytes([t[0], t[1]]))
+                    }
+                    other => panic!("{:?}", other),
+                },
+                other => panic!("{:?}", other),
+            }
+        }
+        seen
+    });
+    for _ in 0..4 {
+        let _ = client.ping(addr);
+    }
+    let seen = queries.join().unwrap();
+    assert!(
+        seen.windows(2).any(|w| w[1] != w[0].wrapping_add(1)),
+        "transaction ids walk a counter: {:?}",
+        seen
+    );
+}

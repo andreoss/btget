@@ -194,7 +194,7 @@ pub fn parse_get_peers_reply(r: &BTreeMap<Vec<u8>, Value>) -> GetPeersReply {
 pub struct DhtClient {
     socket: UdpSocket,
     own: NodeId,
-    txid_counter: std::cell::Cell<u16>,
+    random: crate::random::Source,
 }
 
 impl DhtClient {
@@ -206,7 +206,7 @@ impl DhtClient {
         Ok(DhtClient {
             socket,
             own,
-            txid_counter: std::cell::Cell::new(seed_txid()),
+            random: crate::random::Source::new(),
         })
     }
 
@@ -220,9 +220,7 @@ impl DhtClient {
         name: &str,
         extra: Vec<(&[u8], Value)>,
     ) -> Result<BTreeMap<Vec<u8>, Value>, Error> {
-        let counter = self.txid_counter.get().wrapping_add(1);
-        self.txid_counter.set(counter);
-        let txid = counter.to_be_bytes();
+        let txid = (self.random.next_u64() as u16).to_be_bytes();
         let packet = build_query(&txid, &self.own, name, extra);
         self.socket
             .send_to(&packet, addr)
@@ -311,22 +309,9 @@ fn reply_id(r: &BTreeMap<Vec<u8>, Value>) -> Result<NodeId, Error> {
     }
 }
 
-fn seed_txid() -> u16 {
-    use std::hash::{BuildHasher, Hasher};
-    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
-    hasher.write_u32(std::process::id());
-    hasher.finish() as u16
-}
-
 pub fn random_node_id() -> NodeId {
-    use std::hash::{BuildHasher, Hasher};
     let mut out = [0u8; 20];
-    for chunk in out.chunks_mut(8) {
-        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
-        hasher.write_u8(chunk.len() as u8);
-        let bytes = hasher.finish().to_be_bytes();
-        chunk.copy_from_slice(&bytes[..chunk.len()]);
-    }
+    crate::random::Source::new().fill(&mut out);
     out[0] &= 0x7f;
     NodeId(out)
 }

@@ -407,14 +407,11 @@ fn resolve_magnet(
 }
 
 fn generate_peer_id() -> [u8; 20] {
-    use std::hash::{BuildHasher, Hasher};
     let mut id = *b"-BG0001-000000000000";
-    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
-    hasher.write_u32(std::process::id());
-    let salt = hasher.finish();
-    for (i, byte) in id[8..].iter_mut().enumerate() {
-        let n = (salt >> ((i % 8) * 8)) as u8;
-        *byte = b'a' + (n % 26);
+    let mut salt = [0u8; 12];
+    bt::random::Source::new().fill(&mut salt);
+    for (byte, value) in id[8..].iter_mut().zip(salt) {
+        *byte = b'a' + (value % 26);
     }
     id
 }

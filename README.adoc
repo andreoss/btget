@@ -32,6 +32,11 @@ See btget --help for the option list.
 * IPv4 and IPv6 trackers and peers
 * verbose and quiet output modes
 
+== Limitations
+
+* tracker announces use plain HTTP; https tracker urls are refused
+* peer connections carry no encryption or protocol obfuscation
+
 == License
 
 GPL-3.0.  See the LICENSE file.

@@ -559,8 +559,6 @@ impl<'a> Engine<'a> {
                 }
             }
             Message::Piece { index, begin, data } => {
-                peer.downloaded_from += data.len() as u64;
-                peer.last_useful = Instant::now();
                 let mut finished: Option<PieceJob> = None;
                 if let Some(job) = peer.job.as_mut() {
                     if job.index == index
@@ -569,6 +567,8 @@ impl<'a> Engine<'a> {
                             .complete(index, begin, data.len() as u32)
                             .is_some()
                     {
+                        peer.downloaded_from += data.len() as u64;
+                        peer.last_useful = Instant::now();
                         let start = begin as usize;
                         if start + data.len() <= job.data.len() {
                             job.data[start..start + data.len()].copy_from_slice(&data);

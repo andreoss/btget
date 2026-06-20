@@ -108,6 +108,9 @@ fn check_header(raw: &[u8], expected_action: u32, transaction_id: u32) -> Result
 }
 
 pub fn udp_tracker_addr(url: &str) -> Result<(String, u16), Error> {
+    if !crate::tracker::url_is_printable_ascii(url) {
+        return Err(Error::UnsupportedUrl(url.to_string()));
+    }
     let rest = url
         .strip_prefix("udp://")
         .ok_or_else(|| Error::UnsupportedUrl(url.to_string()))?;
@@ -121,10 +124,7 @@ pub fn udp_tracker_addr(url: &str) -> Result<(String, u16), Error> {
 }
 
 fn next_transaction_id() -> u32 {
-    use std::hash::{BuildHasher, Hasher};
-    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
-    hasher.write_u64(std::process::id() as u64);
-    hasher.finish() as u32
+    crate::random::Source::new().next_u64() as u32
 }
 
 pub fn udp_announce(

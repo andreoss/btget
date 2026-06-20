@@ -102,3 +102,27 @@ fn out_of_range_io_rejected() {
     assert!(storage.read_block(0, 0, 10).is_err());
     assert!(storage.write_block(1, 0, b"x").is_err());
 }
+
+#[test]
+#[cfg(unix)]
+fn allocate_refuses_to_write_through_a_symlink() {
+    let dir = scratch("symlink-target");
+    let outside = scratch("symlink-outside");
+    std::fs::create_dir_all(dir.join("demo-dir")).unwrap();
+    std::os::unix::fs::symlink(outside.join("stolen.txt"), dir.join("demo-dir/a.txt")).unwrap();
+    let storage = multi_storage(&dir);
+    let error = storage.allocate().unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(!outside.join("stolen.txt").exists());
+}
+
+#[test]
+fn allocate_does_not_truncate_a_longer_file() {
+    let dir = scratch("no-truncate");
+    let storage = multi_storage(&dir);
+    let path = storage.paths()[0].clone();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, vec![b'z'; 4096]).unwrap();
+    storage.allocate().unwrap();
+    assert_eq!(std::fs::read(&path).unwrap().len(), 4096);
+}

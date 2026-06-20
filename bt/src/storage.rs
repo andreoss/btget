@@ -12,6 +12,7 @@ pub struct Segment {
 
 #[derive(Debug)]
 pub struct Storage {
+    root: PathBuf,
     paths: Vec<PathBuf>,
     lengths: Vec<u64>,
     piece_length: u64,
@@ -32,6 +33,7 @@ impl Storage {
             lengths.push(file.length);
         }
         Storage {
+            root: output_dir.to_path_buf(),
             paths,
             lengths,
             piece_length: meta.piece_length,
@@ -83,12 +85,36 @@ impl Storage {
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
             }
+            self.refuse_symlinks(path)?;
             let file = OpenOptions::new()
                 .create(true)
                 .write(true)
                 .truncate(false)
                 .open(path)?;
-            file.set_len(*length)?;
+            if file.metadata()?.len() < *length {
+                file.set_len(*length)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn refuse_symlinks(&self, path: &Path) -> io::Result<()> {
+        let relative = match path.strip_prefix(&self.root) {
+            Ok(rest) => rest,
+            Err(_) => return Ok(()),
+        };
+        let mut walked = self.root.clone();
+        for component in relative.components() {
+            walked.push(component);
+            match fs::symlink_metadata(&walked) {
+                Ok(meta) if meta.file_type().is_symlink() => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("{} is a symlink", walked.display()),
+                    ))
+                }
+                _ => {}
+            }
         }
         Ok(())
     }

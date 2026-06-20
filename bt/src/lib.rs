@@ -10,6 +10,7 @@ pub mod peer;
 pub mod peer_state;
 pub mod picker;
 pub mod pieces;
+pub mod random;
 pub mod requests;
 pub mod resume;
 pub mod storage;
