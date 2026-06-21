@@ -110,7 +110,7 @@ pub fn build_query(txid: &[u8], own: &NodeId, name: &str, extra: Vec<(&[u8], Val
 }
 
 pub fn parse_reply(raw: &[u8], txid: &[u8]) -> Result<BTreeMap<Vec<u8>, Value>, Error> {
-    let top = match bencode::decode(raw) {
+    let top = match bencode::decode_lenient(raw) {
         Ok(Value::Dict(map)) => map,
         _ => return Err(Error::BadResponse),
     };

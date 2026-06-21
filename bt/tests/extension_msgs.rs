@@ -32,6 +32,14 @@ fn ext_handshake_round_trips() {
 }
 
 #[test]
+fn noncanonical_ext_handshake_parses() {
+    let payload = b"d13:metadata_sizei31235e1:md11:ut_metadatai3ee1:pi06881ee";
+    let parsed = parse_ext_handshake(payload).unwrap();
+    assert_eq!(parsed.ut_metadata, Some(3));
+    assert_eq!(parsed.metadata_size, Some(31235));
+}
+
+#[test]
 fn foreign_ext_handshake_parses() {
     let payload = b"d1:md9:other_exti9e11:ut_metadatai3ee13:metadata_sizei31235e1:v4:demoe";
     let parsed = parse_ext_handshake(payload).unwrap();

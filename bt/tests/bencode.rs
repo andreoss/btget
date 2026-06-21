@@ -1,4 +1,4 @@
-use bt::bencode::{decode, encode, Value};
+use bt::bencode::{decode, decode_lenient, encode, Value};
 use std::collections::BTreeMap;
 
 fn bytes(s: &str) -> Value {
@@ -69,6 +69,32 @@ fn valid_corpus_decodes() {
 fn invalid_corpus_rejected() {
     for sample in INVALID {
         assert!(decode(sample).is_err(), "{:?}", sample);
+    }
+}
+
+#[test]
+fn lenient_decode_accepts_noncanonical_dicts() {
+    let unsorted = b"d1:bi1e1:ai2ee";
+    assert!(decode(unsorted).is_err());
+    assert_eq!(
+        decode_lenient(unsorted).unwrap(),
+        dict(vec![("a", Value::Int(2)), ("b", Value::Int(1))])
+    );
+    assert_eq!(decode_lenient(b"i03e").unwrap(), Value::Int(3));
+    assert_eq!(decode_lenient(b"01:a").unwrap(), bytes("a"));
+}
+
+#[test]
+fn lenient_decode_still_rejects_malformed_input() {
+    for sample in [
+        b"d".as_slice(),
+        b"li1e",
+        b"i1ee",
+        b"4:spamx",
+        b"di1ei2ee",
+        b"2:a",
+    ] {
+        assert!(decode_lenient(sample).is_err(), "{:?}", sample);
     }
 }
 

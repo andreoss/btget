@@ -50,6 +50,18 @@ fn reply_parses_and_checks_txid() {
 }
 
 #[test]
+fn noncanonical_reply_parses() {
+    let mut raw = b"d1:y1:r1:t2:xy1:rd2:id20:".to_vec();
+    raw.extend_from_slice(&[9u8; 20]);
+    raw.extend_from_slice(b"ee");
+    let reply = parse_reply(&raw, b"xy").unwrap();
+    assert_eq!(
+        reply.get(b"id".as_slice()),
+        Some(&Value::Bytes(vec![9u8; 20]))
+    );
+}
+
+#[test]
 fn error_reply_surfaces() {
     let mut top = BTreeMap::new();
     top.insert(b"t".to_vec(), Value::Bytes(b"xy".to_vec()));

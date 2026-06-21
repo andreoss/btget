@@ -114,7 +114,7 @@ fn decode_prefix_dict_with_len(
     payload: &[u8],
 ) -> Result<(BTreeMap<Vec<u8>, Value>, usize), Error> {
     let consumed = find_dict_end(payload).ok_or(Error::BadPayload)?;
-    match bencode::decode(&payload[..consumed]) {
+    match bencode::decode_lenient(&payload[..consumed]) {
         Ok(Value::Dict(map)) => Ok((map, consumed)),
         Ok(_) => Err(Error::NotADict),
         Err(_) => Err(Error::BadPayload),

@@ -20,6 +20,19 @@ fn request() -> AnnounceRequest {
 }
 
 #[test]
+fn noncanonical_announce_body_parses() {
+    let mut body = b"d5:peers6:".to_vec();
+    body.extend_from_slice(&[127, 0, 0, 1, 0x1a, 0xe1]);
+    body.extend_from_slice(b"8:intervali01800ee");
+    let response = parse_response(&body).unwrap();
+    assert_eq!(response.interval, 1800);
+    assert_eq!(
+        response.peers,
+        vec!["127.0.0.1:6881".parse::<SocketAddr>().unwrap()]
+    );
+}
+
+#[test]
 fn escaping_covers_reserved_bytes() {
     assert_eq!(escape_bytes(b"Az09-_.~"), "Az09-_.~");
     assert_eq!(escape_bytes(&[0x00, 0x1f, 0xff, b' ', b'/']), "%00%1F%FF%20%2F");

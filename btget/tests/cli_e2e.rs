@@ -88,6 +88,14 @@ fn start_seeder(metadata: Vec<u8>) -> SocketAddr {
 }
 
 fn start_seeder_on(bind: &str, metadata: Vec<u8>) -> SocketAddr {
+    start_seeder_with(bind, metadata, false)
+}
+
+fn start_noncanonical_seeder(metadata: Vec<u8>) -> SocketAddr {
+    start_seeder_with("127.0.0.1:0", metadata, true)
+}
+
+fn start_seeder_with(bind: &str, metadata: Vec<u8>, noncanonical: bool) -> SocketAddr {
     let listener = TcpListener::bind(bind).unwrap();
     let addr = listener.local_addr().unwrap();
     std::thread::spawn(move || {
@@ -145,10 +153,16 @@ fn start_seeder_on(bind: &str, metadata: Vec<u8>) -> SocketAddr {
                                 b"metadata_size".to_vec(),
                                 Value::Int(metadata.len() as i64),
                             );
-                            let reply = Message::Extended {
-                                ext: 0,
-                                payload: encode(&Value::Dict(top)),
+                            let payload = if noncanonical {
+                                format!(
+                                    "d13:metadata_sizei{}e1:md11:ut_metadatai3eee",
+                                    metadata.len()
+                                )
+                                .into_bytes()
+                            } else {
+                                encode(&Value::Dict(top))
                             };
+                            let reply = Message::Extended { ext: 0, payload };
                             if write_message(&mut stream, &reply).is_err() {
                                 break;
                             }
@@ -483,3 +497,30 @@ fn magnet_metadata_fetch_survives_a_failed_round() {
     assert!(stderr.contains("metadata: demo.bin"), "stderr: {}", stderr);
     assert_eq!(std::fs::read(dir.join("demo.bin")).unwrap(), CONTENT);
 }
+
+#[test]
+fn magnet_metadata_survives_a_noncanonical_ext_handshake() {
+    let dir = scratch("cli-magnet-noncanonical");
+    let torrent = torrent_bytes("http://127.0.0.1:1/announce");
+    let meta = bt::metainfo::parse(&torrent).unwrap();
+    let seeder = start_noncanonical_seeder(info_bytes(&torrent));
+    let tracker = start_tracker(vec![seeder]);
+    let dead_dht = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let uri = format!(
+        "magnet:?xt=urn:btih:{}&tr=http%3A%2F%2F{}%2Fannounce",
+        meta.info_hash.to_hex(),
+        tracker.to_string().replace(':', "%3A")
+    );
+    let output = binary()
+        .arg(&uri)
+        .arg("-o")
+        .arg(&dir)
+        .env("BTGET_DHT_BOOTSTRAP", dead_dht.local_addr().unwrap().to_string())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr);
+    assert!(stderr.contains("metadata: demo.bin"), "stderr: {}", stderr);
+    assert_eq!(std::fs::read(dir.join("demo.bin")).unwrap(), CONTENT);
+}
+

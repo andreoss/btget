@@ -23,7 +23,15 @@ pub enum Error {
 }
 
 pub fn decode(input: &[u8]) -> Result<Value, Error> {
-    let mut parser = Parser { input, pos: 0 };
+    decode_with(input, true)
+}
+
+pub fn decode_lenient(input: &[u8]) -> Result<Value, Error> {
+    decode_with(input, false)
+}
+
+fn decode_with(input: &[u8], strict: bool) -> Result<Value, Error> {
+    let mut parser = Parser { input, pos: 0, strict };
     let value = parser.value(0)?;
     if parser.pos != input.len() {
         return Err(Error::TrailingData);
@@ -72,6 +80,7 @@ fn encode_into(value: &Value, out: &mut Vec<u8>) {
 pub(crate) struct Parser<'a> {
     pub(crate) input: &'a [u8],
     pub(crate) pos: usize,
+    pub(crate) strict: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -115,11 +124,13 @@ impl<'a> Parser<'a> {
         if digits.is_empty() {
             return Err(Error::BadInteger);
         }
-        if digits.len() > 1 && digits[0] == b'0' {
-            return Err(Error::BadInteger);
-        }
-        if negative && digits == b"0" {
-            return Err(Error::BadInteger);
+        if self.strict {
+            if digits.len() > 1 && digits[0] == b'0' {
+                return Err(Error::BadInteger);
+            }
+            if negative && digits == b"0" {
+                return Err(Error::BadInteger);
+            }
         }
         let text = std::str::from_utf8(digits).map_err(|_| Error::BadInteger)?;
         let magnitude: i128 = text.parse().map_err(|_| Error::BadInteger)?;
@@ -136,7 +147,7 @@ impl<'a> Parser<'a> {
         if self.take()? != b':' {
             return Err(Error::BadLength);
         }
-        if digits.len() > 1 && digits[0] == b'0' {
+        if self.strict && digits.len() > 1 && digits[0] == b'0' {
             return Err(Error::BadLength);
         }
         let text = std::str::from_utf8(digits).map_err(|_| Error::BadLength)?;
@@ -174,9 +185,11 @@ impl<'a> Parser<'a> {
                 Value::Bytes(k) => k,
                 _ => return Err(Error::NonStringKey),
             };
-            if let Some(prev) = &last_key {
-                if *prev >= key {
-                    return Err(Error::UnsortedOrDuplicateKey);
+            if self.strict {
+                if let Some(prev) = &last_key {
+                    if *prev >= key {
+                        return Err(Error::UnsortedOrDuplicateKey);
+                    }
                 }
             }
             let item = self.value(depth + 1)?;

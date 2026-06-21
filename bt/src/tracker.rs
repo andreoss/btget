@@ -82,7 +82,7 @@ pub fn escape_bytes(bytes: &[u8]) -> String {
 }
 
 pub fn parse_response(body: &[u8]) -> Result<AnnounceResponse, Error> {
-    let top = match bencode::decode(body) {
+    let top = match bencode::decode_lenient(body) {
         Ok(Value::Dict(map)) => map,
         _ => return Err(Error::BadResponse),
     };
