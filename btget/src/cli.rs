@@ -1,5 +1,6 @@
 use bt::magnet::{self, Magnet};
 use std::path::PathBuf;
+use std::time::Duration;
 
 pub const USAGE: &str = "usage: btget <torrent-file | magnet-link> [options]
 
@@ -7,6 +8,9 @@ options:
   -o, --output <dir>     output directory (default .)
   -p, --port <port>      listen port announced to peers (default 6881)
       --max-peers <n>    peer connection limit (default 40)
+      --metadata-timeout <s>
+                         seconds to keep looking for magnet metadata
+                         (default: keep trying until interrupted)
   -v, --verbose          also log per-peer connections and failures
   -q, --quiet            only the result line and errors
   -h, --help             show this help";
@@ -23,6 +27,7 @@ pub struct Config {
     pub output_dir: PathBuf,
     pub port: u16,
     pub max_peers: usize,
+    pub metadata_timeout: Option<Duration>,
     pub verbose: bool,
     pub quiet: bool,
 }
@@ -61,6 +66,7 @@ pub fn parse(args: &[String]) -> Result<Cli, Error> {
     let mut output_dir = PathBuf::from(".");
     let mut port = 6881u16;
     let mut max_peers = 40usize;
+    let mut metadata_timeout = None;
     let mut verbose = false;
     let mut quiet = false;
     let mut iter = args.iter();
@@ -87,6 +93,16 @@ pub fn parse(args: &[String]) -> Result<Cli, Error> {
                     .filter(|n| *n > 0)
                     .ok_or_else(|| Error::BadValue("--max-peers", value.clone()))?;
             }
+            "--metadata-timeout" => {
+                let value = iter.next().ok_or(Error::MissingValue("--metadata-timeout"))?;
+                let seconds: u64 = value
+                    .parse()
+                    .map_err(|_| Error::BadValue("--metadata-timeout", value.clone()))?;
+                metadata_timeout = match seconds {
+                    0 => None,
+                    n => Some(Duration::from_secs(n)),
+                };
+            }
             other if other.starts_with('-') && other.len() > 1 => {
                 return Err(Error::UnknownOption(other.to_string()))
             }
@@ -104,6 +120,7 @@ pub fn parse(args: &[String]) -> Result<Cli, Error> {
         output_dir,
         port,
         max_peers,
+        metadata_timeout,
         verbose,
         quiet,
     }))

@@ -21,6 +21,7 @@ fn torrent_path_with_defaults() {
             output_dir: PathBuf::from("."),
             port: 6881,
             max_peers: 40,
+            metadata_timeout: None,
             verbose: false,
             quiet: false,
         })

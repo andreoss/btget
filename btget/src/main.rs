@@ -112,7 +112,13 @@ fn run(config: &cli::Config) -> i32 {
                 return 3;
             }
         },
-        cli::Input::Magnet(magnet) => match resolve_magnet(magnet, peer_id, config.port, &log) {
+        cli::Input::Magnet(magnet) => match resolve_magnet(
+            magnet,
+            peer_id,
+            config.port,
+            config.metadata_timeout,
+            &log,
+        ) {
             Ok(resolved) => {
                 bootstrap_peers = resolved.peers;
                 resolved.meta
@@ -270,8 +276,8 @@ struct ResolvedMagnet {
 }
 
 const DEFAULT_DHT_BOOTSTRAP: &str = "router.bittorrent.com:6881,dht.transmissionbt.com:6881";
-const METADATA_ROUNDS: u32 = 3;
-const METADATA_RETRY_PAUSE: Duration = Duration::from_secs(5);
+const METADATA_RETRY_PAUSE: Duration = Duration::from_secs(2);
+const METADATA_RETRY_PAUSE_MAX: Duration = Duration::from_secs(60);
 
 fn announce_peers(
     magnet: &bt::magnet::Magnet,
@@ -337,16 +343,26 @@ fn resolve_magnet(
     magnet: &bt::magnet::Magnet,
     peer_id: [u8; 20],
     port: u16,
+    budget: Option<Duration>,
     log: &Logger,
 ) -> Result<ResolvedMagnet, i32> {
     let tiers: Vec<Vec<String>> = magnet.trackers.iter().map(|t| vec![t.clone()]).collect();
+    let started = Instant::now();
     let mut known: Vec<std::net::SocketAddr> = Vec::new();
     let mut tried: Vec<std::net::SocketAddr> = Vec::new();
     let mut failure = String::new();
-    for round in 0..METADATA_ROUNDS {
+    let mut pause = METADATA_RETRY_PAUSE;
+    let mut round = 0u32;
+    loop {
         if round > 0 {
-            std::thread::sleep(METADATA_RETRY_PAUSE);
+            if budget.is_some_and(|limit| started.elapsed() >= limit) {
+                break;
+            }
+            log.info(&format!("no metadata yet, retrying in {:?}", pause));
+            std::thread::sleep(pause);
+            pause = std::cmp::min(pause * 2, METADATA_RETRY_PAUSE_MAX);
         }
+        round += 1;
         for addr in announce_peers(magnet, peer_id, port, log) {
             if !known.contains(&addr) {
                 known.push(addr);
@@ -368,7 +384,7 @@ fn resolve_magnet(
             batch = known.clone();
         }
         if batch.is_empty() {
-            break;
+            continue;
         }
         for addr in &batch {
             if !tried.contains(addr) {

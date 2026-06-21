@@ -25,6 +25,7 @@ See btget --help for the option list.
 * multi-peer swarm downloads with rarest-first scheduling and reciprocal upload
 * progress reporting and distinct exit codes
 * magnet metadata exchange from peers, retried over newly found peers
+  until it arrives or an optional timeout expires
 * DHT peer discovery for trackerless magnets
 * resume of interrupted downloads
 * privilege reduction via pledge, filesystem confined to the output

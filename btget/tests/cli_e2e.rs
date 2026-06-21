@@ -234,6 +234,8 @@ fn trackerless_magnet_with_dead_dht_is_network_error() {
     let dead = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let output = binary()
         .arg("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567")
+        .arg("--metadata-timeout")
+        .arg("1")
         .env("BTGET_DHT_BOOTSTRAP", dead.local_addr().unwrap().to_string())
         .output()
         .unwrap();
@@ -263,6 +265,8 @@ fn failing_magnet_tracker_is_named() {
     );
     let output = binary()
         .arg(&uri)
+        .arg("--metadata-timeout")
+        .arg("1")
         .env("BTGET_DHT_BOOTSTRAP", dead.local_addr().unwrap().to_string())
         .output()
         .unwrap();
@@ -524,3 +528,34 @@ fn magnet_metadata_survives_a_noncanonical_ext_handshake() {
     assert_eq!(std::fs::read(dir.join("demo.bin")).unwrap(), CONTENT);
 }
 
+#[test]
+fn magnet_metadata_fetch_outlives_three_failed_rounds() {
+    let dir = scratch("cli-magnet-persist");
+    let torrent = torrent_bytes("http://127.0.0.1:1/announce");
+    let meta = bt::metainfo::parse(&torrent).unwrap();
+    let seeder = start_seeder(info_bytes(&torrent));
+    let dead: SocketAddr = "127.0.0.1:1".parse().unwrap();
+    let tracker = start_tracker_rounds(vec![
+        vec![dead],
+        vec![dead],
+        vec![dead],
+        vec![dead, seeder],
+    ]);
+    let dead_dht = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let uri = format!(
+        "magnet:?xt=urn:btih:{}&tr=http%3A%2F%2F{}%2Fannounce",
+        meta.info_hash.to_hex(),
+        tracker.to_string().replace(':', "%3A")
+    );
+    let output = binary()
+        .arg(&uri)
+        .arg("-o")
+        .arg(&dir)
+        .env("BTGET_DHT_BOOTSTRAP", dead_dht.local_addr().unwrap().to_string())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr);
+    assert!(stderr.contains("metadata: demo.bin"), "stderr: {}", stderr);
+    assert_eq!(std::fs::read(dir.join("demo.bin")).unwrap(), CONTENT);
+}
